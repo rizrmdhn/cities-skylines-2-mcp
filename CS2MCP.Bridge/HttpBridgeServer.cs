@@ -191,6 +191,7 @@ namespace CS2MCP
                 || path.StartsWith("/sim/", StringComparison.Ordinal)
                 || path.EndsWith("/set", StringComparison.Ordinal)
                 || path == "/game/save"
+                || path == "/ui/popups/dismiss"
                 || path == "/city/tiles/buy"
                 || path == "/city/dev-tree/purchase"
                 || path == "/transit/stops/place"
@@ -325,7 +326,9 @@ namespace CS2MCP
                 int equals = pair.IndexOf('=');
                 string key = equals < 0 ? pair : pair.Substring(0, equals);
                 string value = equals < 0 ? "" : pair.Substring(equals + 1);
-                request.Query[Uri.UnescapeDataString(key)] = Uri.UnescapeDataString(value);
+                // Form-style encoding ('+' = space, as produced by URLSearchParams) must be
+                // decoded too, otherwise "Medium Road" arrives as "Medium+Road".
+                request.Query[Uri.UnescapeDataString(key.Replace('+', ' '))] = Uri.UnescapeDataString(value.Replace('+', ' '));
             }
         }
 
