@@ -77,7 +77,28 @@ namespace CS2MCP
             }
 
             Bezier4x3 bezier;
-            if (request.TryGetFloat("cx", out float cx) & request.TryGetFloat("cz", out float cz))
+            bool smooth = request.TryGetBool("smooth", out bool rawSmooth) && rawSmooth;
+            bool hasControl = request.TryGetFloat("cx", out float cx) & request.TryGetFloat("cz", out float cz);
+            if (smooth && hasControl)
+            {
+                return BridgeResponse.Error(400, "use either smooth=true or a control point cx/cz, not both");
+            }
+            if (smooth)
+            {
+                // Tangent-continuous ends: follow the road being split (merge/diverge ramps) or continue
+                // a dead end (station tracks, road stubs); free ends point at the other end.
+                float3 a = start.Position;
+                float3 d = end.Position;
+                float third = math.distance(a.xz, d.xz) / 3f;
+                float2 dirA = SmoothEndDirection(start, d.xz - a.xz);
+                float2 dirD = SmoothEndDirection(end, a.xz - d.xz);
+                float3 b = a + new float3(dirA.x, 0f, dirA.y) * third;
+                float3 c = d + new float3(dirD.x, 0f, dirD.y) * third;
+                b.y = math.lerp(a.y, d.y, 1f / 3f);
+                c.y = math.lerp(a.y, d.y, 2f / 3f);
+                bezier = new Bezier4x3(a, b, c, d);
+            }
+            else if (hasControl)
             {
                 // Quadratic bezier through the control point, elevated to cubic.
                 float3 a = start.Position;
@@ -118,6 +139,33 @@ namespace CS2MCP
         /// on the terrain. Compatible = the networks' layers can connect (so a
         /// track never joins a road).
         /// </summary>
+        /// <summary>
+        /// Direction the new segment should leave an end in: along the split road's tangent, or
+        /// continuing a dead-end node's edge, oriented toward the other end; straight otherwise.
+        /// </summary>
+        private float2 SmoothEndDirection(BridgeRoadToolSystem.BuildEnd end, float2 toward)
+        {
+            float2 straight = math.normalizesafe(toward);
+            if (end.Entity == Entity.Null)
+            {
+                return straight;
+            }
+            if (EntityManager.HasComponent<Edge>(end.Entity) && EntityManager.HasComponent<Curve>(end.Entity))
+            {
+                float2 tangent = math.normalizesafe(MathUtils.Tangent(EntityManager.GetComponentData<Curve>(end.Entity).m_Bezier, end.Split).xz);
+                if (math.lengthsq(tangent) == 0f)
+                {
+                    return straight;
+                }
+                return math.dot(tangent, straight) >= 0f ? tangent : -tangent;
+            }
+            if (TryGetOutwardDirection(end.Entity, out float2 outward) && math.dot(outward, straight) > 0f)
+            {
+                return outward;
+            }
+            return straight;
+        }
+
         private BridgeRoadToolSystem.BuildEnd ResolveBuildEnd(float2 point, float snap, NetData netData, ref TerrainHeightData heightData)
         {
             Entity bestNode = Entity.Null;

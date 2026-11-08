@@ -7,6 +7,7 @@ using Game.Net;
 using Game.Prefabs;
 using Game.Simulation;
 using Game.Tools;
+using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -32,6 +33,7 @@ namespace CS2MCP
             Idle,
             CreateDefinitions,
             Apply,
+            Terraform,
             Finish,
         }
 
@@ -43,6 +45,9 @@ namespace CS2MCP
             Upgrade,
             Area,
             NodeUpgrade,
+            Move,
+            ServiceUpgrade,
+            Terraform,
         }
 
         private Stage m_Stage = Stage.Idle;
@@ -61,6 +66,20 @@ namespace CS2MCP
         private quaternion m_PendingRotation;
         private BridgeRequest m_PendingRequest;
         private ToolBaseSystem m_PreviousTool;
+        private bool m_PendingDryRun;
+        private Entity m_PendingOwner;
+        private Transform m_PendingFrom;
+        private EntityQuery m_TempQuery;
+        private EntityQuery m_DefinitionQuery;
+        private EntityQuery m_BrushPrefabQuery;
+        private Entity m_TerraformBrush;
+        private float m_TerraformSize;
+        private float m_TerraformStrength;
+        private float3 m_TerraformTarget;
+        private int m_TerraformFramesLeft;
+        private int m_TerraformFramesApplied;
+        private int m_TerraformFramesBlocked;
+        private const float kTerraformStep = 0.1f; // seconds of brush time per tool frame
 
         private CityConfigurationSystem m_CityConfigurationSystem;
 
@@ -73,6 +92,9 @@ namespace CS2MCP
         {
             base.OnCreate();
             m_CityConfigurationSystem = base.World.GetOrCreateSystemManaged<CityConfigurationSystem>();
+            m_TempQuery = GetEntityQuery(ComponentType.ReadOnly<Temp>(), ComponentType.Exclude<Deleted>());
+            m_DefinitionQuery = GetDefinitionQuery();
+            m_BrushPrefabQuery = GetBrushQuery();
         }
 
         public override PrefabBase GetPrefab()
@@ -87,12 +109,13 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueuePlacement(Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation, BridgeRequest request)
+        public bool TryQueuePlacement(Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
                 return false;
             }
+            m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.Object;
             m_PendingPrefabEntity = prefabEntity;
             m_PendingPrefab = prefab;
@@ -104,12 +127,13 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueueRoad(Entity prefabEntity, PrefabBase prefab, float3 start, float3 end, float3 mid, bool hasMid, float2 elevations, BridgeRequest request)
+        public bool TryQueueRoad(Entity prefabEntity, PrefabBase prefab, float3 start, float3 end, float3 mid, bool hasMid, float2 elevations, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
                 return false;
             }
+            m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.Net;
             m_PendingPrefabEntity = prefabEntity;
             m_PendingPrefab = prefab;
@@ -125,12 +149,13 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueueUpgrade(Entity target, string label, CompositionFlags upgradeFlags, BridgeRequest request)
+        public bool TryQueueUpgrade(Entity target, string label, CompositionFlags upgradeFlags, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
                 return false;
             }
+            m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.Upgrade;
             m_PendingTarget = target;
             m_PendingLabel = label;
@@ -145,12 +170,13 @@ namespace CS2MCP
         /// flags (traffic lights, all-way stop...) with finalFlags, as the game's
         /// intersection tools do.
         /// </summary>
-        public bool TryQueueNodeUpgrade(Entity node, string label, CompositionFlags finalFlags, BridgeRequest request)
+        public bool TryQueueNodeUpgrade(Entity node, string label, CompositionFlags finalFlags, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
                 return false;
             }
+            m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.NodeUpgrade;
             m_PendingTarget = node;
             m_PendingLabel = label;
@@ -161,12 +187,13 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueueDemolish(Entity target, string label, BridgeRequest request)
+        public bool TryQueueDemolish(Entity target, string label, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
                 return false;
             }
+            m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.Demolish;
             m_PendingTarget = target;
             m_PendingLabel = label;
@@ -176,16 +203,108 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueueArea(Entity prefabEntity, PrefabBase prefab, float3[] polygonNodes, BridgeRequest request)
+        public bool TryQueueArea(Entity prefabEntity, PrefabBase prefab, float3[] polygonNodes, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
                 return false;
             }
+            m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.Area;
             m_PendingPrefabEntity = prefabEntity;
             m_PendingPrefab = prefab;
             m_PendingAreaNodes = polygonNodes;
+            m_PendingRequest = request;
+            Activate();
+            return true;
+        }
+
+        /// <summary>
+        /// Must be called on the simulation thread. Relocates an existing object (service building,
+        /// signature building, service upgrade, prop...) like the selected-info panel's Relocate
+        /// button: the game's own ObjectToolBaseSystem definition job runs with the object as
+        /// original, so the building keeps its identity, upgrades, workers and vehicles.
+        /// </summary>
+        public bool TryQueueMove(Entity target, string label, float3 position, quaternion rotation, bool dryRun, BridgeRequest request)
+        {
+            if (m_Stage != Stage.Idle)
+            {
+                return false;
+            }
+            m_PendingKind = OperationKind.Move;
+            m_PendingOwner = Entity.Null;
+            m_PendingTarget = target;
+            m_PendingLabel = label;
+            m_PendingPrefabEntity = EntityManager.GetComponentData<PrefabRef>(target).m_Prefab;
+            m_PendingPrefab = null;
+            m_PendingFrom = EntityManager.GetComponentData<Transform>(target);
+            m_PendingPosition = position;
+            m_PendingRotation = rotation;
+            m_PendingDryRun = dryRun;
+            m_PendingRequest = request;
+            Activate();
+            return true;
+        }
+
+        /// <summary>
+        /// Must be called on the simulation thread. Adds a service upgrade (extension wing, parking lot,
+        /// extra garage...) to an existing building the way the upgrade menu does: the game's object
+        /// definition job runs with the building as owner, so the upgrade is installed on it.
+        /// </summary>
+        public bool TryQueueServiceUpgrade(Entity owner, Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation, bool dryRun, BridgeRequest request)
+        {
+            if (m_Stage != Stage.Idle)
+            {
+                return false;
+            }
+            m_PendingKind = OperationKind.ServiceUpgrade;
+            m_PendingOwner = owner;
+            m_PendingTarget = owner;
+            m_PendingPrefabEntity = prefabEntity;
+            m_PendingPrefab = prefab;
+            m_PendingLabel = prefab != null ? prefab.name : null;
+            m_PendingPosition = position;
+            m_PendingRotation = rotation;
+            m_PendingDryRun = dryRun;
+            m_PendingRequest = request;
+            Activate();
+            return true;
+        }
+
+        /// <summary>
+        /// Must be called on the simulation thread. Runs a landscaping brush (TerrainToolSystem's
+        /// definition: CreationDefinition with the brush prefab + BrushDefinition with the
+        /// terraforming prefab) at a point for the given brush time, one brush definition per tool
+        /// frame with applyMode=Apply, as when the player holds the mouse button down.
+        /// </summary>
+        public bool TryQueueTerraform(Entity terraformPrefab, PrefabBase prefab, float3 center, float size, float strength,
+            float3 target, float seconds, bool dryRun, BridgeRequest request, out string error)
+        {
+            error = null;
+            if (m_Stage != Stage.Idle)
+            {
+                error = "another build operation is in progress, retry shortly";
+                return false;
+            }
+            BrushPrefab brush = FindDefaultBrush(m_BrushPrefabQuery);
+            if (brush == null)
+            {
+                error = "no terrain brush prefab found";
+                return false;
+            }
+            m_PendingKind = OperationKind.Terraform;
+            m_PendingPrefabEntity = terraformPrefab;
+            m_PendingPrefab = prefab;
+            m_PendingLabel = prefab != null ? prefab.name : null;
+            m_PendingPosition = center;
+            m_TerraformBrush = m_PrefabSystem.GetEntity(brush);
+            m_TerraformSize = size;
+            m_TerraformStrength = strength;
+            m_TerraformTarget = target;
+            m_TerraformFramesLeft = math.max(1, (int)math.round(seconds / kTerraformStep));
+            m_TerraformFramesApplied = 0;
+            m_TerraformFramesBlocked = 0;
+            m_PendingDryRun = dryRun;
             m_PendingRequest = request;
             Activate();
             return true;
@@ -201,6 +320,7 @@ namespace CS2MCP
         [Preserve]
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
+            JobHandle result = inputDeps;
             try
             {
                 switch (m_Stage)
@@ -227,9 +347,94 @@ namespace CS2MCP
                             case OperationKind.NodeUpgrade:
                                 CreateNodeUpgradeDefinition();
                                 break;
+                            case OperationKind.Move:
+                            case OperationKind.ServiceUpgrade:
+                                result = CreateNativeObjectDefinitions(inputDeps);
+                                break;
+                            case OperationKind.Terraform:
+                                CreateBrushDefinition();
+                                break;
                         }
-                        m_Stage = Stage.Apply;
+                        m_Stage = m_PendingKind == OperationKind.Terraform && !m_PendingDryRun ? Stage.Terraform : Stage.Apply;
                         break;
+
+                    case Stage.Terraform:
+                        result = DestroyDefinitions(m_DefinitionQuery, m_ToolOutputBarrier, inputDeps);
+                        if (m_TerraformFramesLeft > 0)
+                        {
+                            if (GetAllowApply())
+                            {
+                                applyMode = ApplyMode.Apply;
+                                m_TerraformFramesApplied++;
+                            }
+                            else
+                            {
+                                applyMode = ApplyMode.Clear;
+                                m_TerraformFramesBlocked++;
+                            }
+                            m_TerraformFramesLeft--;
+                            CreateBrushDefinition();
+                        }
+                        else
+                        {
+                            applyMode = ApplyMode.Clear;
+                            CompleteTerraform();
+                            m_Stage = Stage.Finish;
+                        }
+                        break;
+
+                    case Stage.Apply when m_PendingKind == OperationKind.Move:
+                        ApplyMove();
+                        m_Stage = Stage.Finish;
+                        break;
+
+                    case Stage.Apply when m_PendingDryRun:
+                    {
+                        bool valid = GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter;
+                        applyMode = ApplyMode.Clear;
+                        int cost = PreviewCost();
+                        CompletePending(BridgeResponse.Json(new
+                        {
+                            dryRun = true,
+                            valid,
+                            operation = m_PendingKind.ToString(),
+                            prefab = m_PendingPrefab != null ? m_PendingPrefab.name : m_PendingLabel,
+                            cost = math.max(cost, 0),
+                            refund = math.max(-cost, 0),
+                            reason = valid ? null : "blocked by game validation (overlap, water, steep terrain, no money, protected entity...)",
+                            note = "nothing was changed; repeat without dryRun to apply",
+                        }));
+                        m_Stage = Stage.Finish;
+                        break;
+                    }
+
+                    case Stage.Apply when m_PendingKind == OperationKind.ServiceUpgrade:
+                    {
+                        bool valid = GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter;
+                        int cost = PreviewCost();
+                        if (valid)
+                        {
+                            applyMode = ApplyMode.Apply;
+                            CompletePending(BridgeResponse.Json(new
+                            {
+                                installed = true,
+                                upgrade = m_PendingLabel,
+                                building = new { index = m_PendingOwner.Index, version = m_PendingOwner.Version },
+                                position = new { x = m_PendingPosition.x, z = m_PendingPosition.z },
+                                cost = math.max(cost, 0),
+                                note = "installed via the game's upgrade pipeline; check cs2_building_upgrades",
+                            }));
+                        }
+                        else
+                        {
+                            applyMode = ApplyMode.Clear;
+                            CompletePending(BridgeResponse.Error(409,
+                                "upgrade blocked by game validation (overlap, too far from the building, not enough money, already built...); " +
+                                "try another position or rotation (dryRun=true to probe)"));
+                        }
+                        m_Stage = Stage.Finish;
+                        break;
+                    }
 
                     case Stage.Apply:
                         if (GetAllowApply())
@@ -264,7 +469,229 @@ namespace CS2MCP
                 applyMode = ApplyMode.None;
                 Deactivate();
             }
-            return inputDeps;
+            return result;
+        }
+
+        /// <summary>
+        /// Runs the game's native object definition job (the one ObjectToolSystem uses in Move and
+        /// Upgrade mode): the moved object as original, or the upgraded building as owner, and a
+        /// single control point at the new transform.
+        /// </summary>
+        private JobHandle CreateNativeObjectDefinitions(JobHandle inputDeps)
+        {
+            var controlPoints = new NativeList<ControlPoint>(1, Allocator.TempJob);
+            controlPoints.Add(new ControlPoint
+            {
+                m_Position = m_PendingPosition,
+                m_HitPosition = m_PendingPosition,
+                m_Rotation = m_PendingRotation,
+                m_HitDirection = new float3(0f, 1f, 0f),
+            });
+            JobHandle handle = CreateDefinitions(
+                objectPrefab: m_PendingPrefabEntity,
+                transformPrefab: Entity.Null,
+                brushPrefab: Entity.Null,
+                owner: m_PendingOwner,
+                original: m_PendingKind == OperationKind.Move ? m_PendingTarget : Entity.Null,
+                laneEditor: Entity.Null,
+                theme: m_CityConfigurationSystem.defaultTheme,
+                controlPoints: controlPoints,
+                attachmentPrefab: default,
+                editorMode: m_ToolSystem.actionMode.IsEditor(),
+                lefthandTraffic: m_CityConfigurationSystem.leftHandTraffic,
+                removing: false,
+                stamping: false,
+                brushSize: 0f,
+                brushAngle: 0f,
+                brushStrength: 0f,
+                distance: 0f,
+                deltaTime: 0f,
+                randomSeed: RandomSeed.Next(),
+                snap: Snap.Upright,
+                ageMask: AgeMask.Mature,
+                decorationMode: false,
+                overrides: default,
+                inputDeps: inputDeps);
+            controlPoints.Dispose(handle);
+            return handle;
+        }
+
+        /// <summary>
+        /// Mirrors ObjectToolSystem.GetAllowApply in Move mode: the original must not end up deleted,
+        /// a preview must exist, and no validation error may trace back to the moved object.
+        /// Unlike the game, ToolSystem.ignoreErrors is not honoured.
+        /// </summary>
+        private void ApplyMove()
+        {
+            bool originalDeleted = m_OriginalDeletedSystem.GetOriginalDeletedResult(0);
+            bool hasPreview = !m_TempQuery.IsEmptyIgnoreFilter;
+            bool blocked = HasMovedObjectError(m_PendingTarget);
+            bool valid = !originalDeleted && hasPreview && !blocked;
+
+            if (valid && !m_PendingDryRun)
+            {
+                applyMode = ApplyMode.Apply;
+                m_TerrainSystem.OnBuildingMoved(m_PendingTarget);
+            }
+            else
+            {
+                applyMode = ApplyMode.Clear;
+            }
+
+            float3 fromForward = math.mul(m_PendingFrom.m_Rotation, new float3(0f, 0f, 1f));
+            float3 toForward = math.mul(m_PendingRotation, new float3(0f, 0f, 1f));
+            var from = new
+            {
+                x = m_PendingFrom.m_Position.x,
+                z = m_PendingFrom.m_Position.z,
+                rotation = math.round(math.degrees(math.atan2(fromForward.x, fromForward.z))),
+            };
+            var to = new
+            {
+                x = m_PendingPosition.x,
+                z = m_PendingPosition.z,
+                rotation = math.round(math.degrees(math.atan2(toForward.x, toForward.z))),
+            };
+            var entity = new { index = m_PendingTarget.Index, version = m_PendingTarget.Version };
+
+            if (!valid)
+            {
+                string reason = !hasPreview
+                    ? "the game produced no preview for this move"
+                    : originalDeleted
+                        ? "the move would delete the original building"
+                        : "the new spot is blocked by game validation (overlap, water, steep terrain, no road access, outside owned tiles...)";
+                if (m_PendingDryRun)
+                {
+                    CompletePending(BridgeResponse.Json(new { dryRun = true, valid = false, prefab = m_PendingLabel, entity, from, to, reason }));
+                }
+                else
+                {
+                    CompletePending(BridgeResponse.Error(409, $"relocation refused: {reason}; try another position or rotation (dryRun=true to probe)"));
+                }
+                return;
+            }
+
+            int moveCost = PreviewCost();
+            CompletePending(BridgeResponse.Json(new
+            {
+                cost = math.max(moveCost, 0),
+                refund = math.max(-moveCost, 0),
+                moved = !m_PendingDryRun,
+                dryRun = m_PendingDryRun,
+                valid = true,
+                prefab = m_PendingLabel,
+                entity,
+                from,
+                to,
+                note = m_PendingDryRun
+                    ? "the game accepts this move; call again without dryRun to relocate"
+                    : "relocated via the game's Relocate pipeline: same entity id, upgrades, workers and vehicles kept; verify via cs2_buildings_near or cs2_screenshot",
+            }));
+        }
+
+        /// <summary>TerrainToolSystem.CreateDefinitionsJob for a brush held still at one point.</summary>
+        private void CreateBrushDefinition()
+        {
+            EntityCommandBuffer commandBuffer = m_ToolOutputBarrier.CreateCommandBuffer();
+            Entity e = commandBuffer.CreateEntity();
+            commandBuffer.AddComponent(e, new CreationDefinition { m_Prefab = m_TerraformBrush });
+            commandBuffer.AddComponent(e, new BrushDefinition
+            {
+                m_Tool = m_PendingPrefabEntity,
+                m_Line = new Line3.Segment(m_PendingPosition, m_PendingPosition),
+                m_Size = m_TerraformSize,
+                m_Angle = 0f,
+                m_Strength = m_TerraformStrength,
+                m_Time = kTerraformStep,
+                m_Target = m_TerraformTarget,
+                m_Start = m_PendingPosition,
+            });
+            commandBuffer.AddComponent(e, default(Updated));
+        }
+
+        private void CompleteTerraform()
+        {
+            if (m_TerraformFramesApplied == 0)
+            {
+                CompletePending(BridgeResponse.Error(409,
+                    "landscaping blocked by game validation (outside owned tiles, protected area...); nothing was changed"));
+                return;
+            }
+            CompletePending(BridgeResponse.Json(new
+            {
+                terraformed = true,
+                tool = m_PendingLabel,
+                center = new { x = m_PendingPosition.x, z = m_PendingPosition.z },
+                size = m_TerraformSize,
+                strength = m_TerraformStrength,
+                brushSeconds = m_TerraformFramesApplied * kTerraformStep,
+                blockedFrames = m_TerraformFramesBlocked,
+                note = "applied with the game's landscaping brush; the height map refreshes over the next frames, " +
+                       "check with cs2_terrain or cs2_screenshot and repeat for a stronger effect",
+            }));
+        }
+
+        /// <summary>
+        /// Net cost of the current preview, summed exactly like Game.UI.Tooltip.TempCostTooltipSystem
+        /// (positive = cost, negative = refund).
+        /// </summary>
+        private int PreviewCost()
+        {
+            const TempFlags counted = TempFlags.Create | TempFlags.Delete | TempFlags.Modify | TempFlags.Replace | TempFlags.Upgrade | TempFlags.RemoveCost;
+            int total = 0;
+            using (NativeArray<Temp> temps = m_TempQuery.ToComponentDataArray<Temp>(Allocator.Temp))
+            {
+                foreach (Temp temp in temps)
+                {
+                    if ((temp.m_Flags & counted) != 0 && (temp.m_Flags & TempFlags.Cancel) == 0)
+                    {
+                        total += temp.m_Cost;
+                    }
+                }
+            }
+            return total;
+        }
+
+        /// <summary>Mirrors ObjectToolSystem.HasMovedObjectError: an Error whose Temp/Owner chain leads to the moved object.</summary>
+        private bool HasMovedObjectError(Entity moving)
+        {
+            if (m_ErrorQuery.IsEmptyIgnoreFilter)
+            {
+                return false;
+            }
+            using (NativeArray<Entity> errors = m_ErrorQuery.ToEntityArray(Allocator.Temp))
+            {
+                foreach (Entity error in errors)
+                {
+                    Entity entity = error;
+                    for (int depth = 0; depth < 32; depth++)
+                    {
+                        if (entity == moving)
+                        {
+                            return true;
+                        }
+                        if (EntityManager.HasComponent<Temp>(entity))
+                        {
+                            Entity original = EntityManager.GetComponentData<Temp>(entity).m_Original;
+                            if (original != Entity.Null)
+                            {
+                                entity = original;
+                                continue;
+                            }
+                        }
+                        Entity owner = EntityManager.HasComponent<Owner>(entity)
+                            ? EntityManager.GetComponentData<Owner>(entity).m_Owner
+                            : Entity.Null;
+                        if (owner == Entity.Null)
+                        {
+                            break;
+                        }
+                        entity = owner;
+                    }
+                }
+            }
+            return false;
         }
 
         private BridgeResponse BuildSuccessResponse()
@@ -340,6 +767,9 @@ namespace CS2MCP
             m_PendingRequest = null;
             m_PendingPrefab = null;
             m_PendingPrefabEntity = Entity.Null;
+            m_PendingOwner = Entity.Null;
+            m_PendingDryRun = false;
+            m_TerraformFramesLeft = 0;
             if (m_ToolSystem.activeTool == this)
             {
                 m_ToolSystem.activeTool = m_PreviousTool != null ? m_PreviousTool : m_DefaultToolSystem;

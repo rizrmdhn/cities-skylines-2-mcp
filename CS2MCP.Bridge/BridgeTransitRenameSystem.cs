@@ -55,8 +55,8 @@ namespace CS2MCP
                 catch (Exception e)
                 {
                     Mod.Log.Warn($"renaming line {pending.Line} failed: {e}");
-                    nameWarning = $"the line was created but naming it failed ({e.GetType().Name}: {e.Message}); " +
-                                  "rename it in the transportation panel";
+                    nameWarning = $"naming failed ({e.GetType().Name}: {e.Message}); " +
+                                  "rename it in the game UI";
                 }
 
                 BridgeResponse response;

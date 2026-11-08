@@ -91,7 +91,7 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 
 启动游戏、读取存档，然后问 Claude："看看我的城市财政状况"、"在河边划一片住宅区"、"修一条路把工业区接上高速"。
 
-## 工具总览（65 个）
+## 工具总览（77 个）
 
 **状态与画面**
 
@@ -110,6 +110,11 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | `cs2_demand` | RCI 需求 + 需求因子（内部 0-255 刻度，暂停时不刷新） |
 | `cs2_budget` | 收支明细：14 项收入 / 15 项支出来源 |
 | `cs2_city_services` | 电力、水务、垃圾状态 |
+| `cs2_happiness` | 城市信息面板的幸福度因素（税、污染、服务、无家可归……）及其对健康/幸福的影响，最差优先 |
+| `cs2_economy` | 各资源的产量、消耗、产能、库存、进出口和消费方（生产面板数据），以及企业统计（岗位填充、盈利） |
+| `cs2_progression` | 经验、已达里程碑、下一里程碑进度和奖励、发展点数 |
+| `cs2_dev_tree` / `cs2_dev_tree_purchase` | 发展树节点（价格、为何暂不能购买）/ 像发展树面板一样购买节点 |
+| `cs2_coverage` | 分区建筑的公共服务覆盖（医疗、消防、警察、公园、邮政、教育、避难所、福利、通信）：覆盖不足的建筑/居民、按信息视图色阶分级、服务建筑数量，以及适合新建服务建筑的最大覆盖缺口 |
 | `cs2_labor` | 就业、失业率、按教育等级的岗位供需、年龄结构 |
 | `cs2_statistics` | 60+ 种统计项历史曲线（每游戏日 32 采样） |
 | `cs2_terrain` | 全图高度 + 水体栅格 |
@@ -138,6 +143,11 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | `cs2_buildings_near` | 某点周围的建筑（类型、占地、朝向），用于找空位或确定要清理的对象 |
 | `cs2_zone_area` / `cs2_list_zones` | 划区与区划类型（`None` 清除） |
 | `cs2_demolish` | 拆除建筑/路段/树木/地区（推土机管线） |
+| `cs2_building_connections` | 车站、车库或港口尚未连接的轨道/道路/步道/航道端点及其朝外方向 |
+| `cs2_building_upgrades` / `cs2_place_upgrade` | 服务建筑的升级菜单（价格、锁定、是否已建、放置方式）/ 通过游戏升级管线安装升级 |
+| `cs2_terraform` | 地形笔刷：在某点抬高、降低、整平（到指定高度）或平滑，由游戏校验 |
+| `cs2_rename` | 重命名建筑、地区、街道或公交线路（空名称恢复默认） |
+| `cs2_move_building` | 不拆除即可把服务/标志性建筑、服务升级、公园或道具移到新位置/朝向（游戏自带的搬迁管线：实体、升级、员工和车辆保留；由游戏校验，`dryRun` 可试探） |
 | `cs2_list_buildings` / `cs2_list_roads` / `cs2_list_objects` | 实体清单（ID、坐标） |
 
 **财政与政策**

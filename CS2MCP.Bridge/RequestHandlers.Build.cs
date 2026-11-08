@@ -313,7 +313,7 @@ namespace CS2MCP
             quaternion rotation = quaternion.RotateY(math.radians(rotationDegrees));
 
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueuePlacement(prefabEntity, prefab, position, rotation, request))
+            if (!tool.TryQueuePlacement(prefabEntity, prefab, position, rotation, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
@@ -377,7 +377,7 @@ namespace CS2MCP
             var elevations = new float2(math.clamp(e1, -30f, 60f), math.clamp(e2, -30f, 60f));
 
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueueRoad(prefabEntity, prefab, start, end, mid, hasMid, elevations, request))
+            if (!tool.TryQueueRoad(prefabEntity, prefab, start, end, mid, hasMid, elevations, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
@@ -448,7 +448,7 @@ namespace CS2MCP
             }
 
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueueUpgrade(entity, prefabName, flags, request))
+            if (!tool.TryQueueUpgrade(entity, prefabName, flags, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
@@ -551,7 +551,7 @@ namespace CS2MCP
             // Deletion MUST go through the game's bulldoze pipeline. Adding a raw
             // Deleted component skips node/block/lane cleanup and corrupts state.
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueueDemolish(entity, prefabName, request))
+            if (!tool.TryQueueDemolish(entity, prefabName, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }

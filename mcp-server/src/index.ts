@@ -7,9 +7,11 @@
  * CS2_BRIDGE_URL environment variable).
  */
 import "dotenv/config";
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { registerPromptsAndResources } from "./prompts.js";
 
 const BRIDGE_URL = (process.env.CS2_BRIDGE_URL ?? "http://127.0.0.1:8642").replace(/\/+$/, "");
 const BRIDGE_TOKEN = process.env.CS2MCP_TOKEN?.trim() ?? "";
@@ -22,14 +24,17 @@ function isMutatingPath(path: string): boolean {
     path.startsWith("/build/") ||
     path.startsWith("/sim/") ||
     path.endsWith("/set") ||
-    ["/game/save", "/city/tiles/buy", "/transit/stops/place", "/transit/lines/create", "/transit/lines/delete"].includes(path)
+    ["/game/save", "/city/tiles/buy", "/city/dev-tree/purchase", "/transit/stops/place", "/transit/lines/create", "/transit/lines/delete"].includes(path)
   );
 }
 
 async function bridgeFetch(path: string, timeoutMs: number): Promise<Response> {
   const route = path.split("?", 1)[0];
+  // The bridge decodes the query with Uri.UnescapeDataString, which keeps '+' literal, so spaces
+  // (URLSearchParams writes them as '+'; a real '+' is already %2B) must go out as %20.
+  const query = path.slice(route.length).replace(/\+/g, "%20");
   try {
-    return await fetch(`${BRIDGE_URL}${path}`, {
+    return await fetch(`${BRIDGE_URL}${route}${query}`, {
       method: isMutatingPath(route) ? "POST" : "GET",
       headers: BRIDGE_TOKEN ? { "X-CS2MCP-Token": BRIDGE_TOKEN } : {},
       signal: AbortSignal.timeout(timeoutMs),
@@ -67,7 +72,10 @@ function errorResult(err: unknown) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
 }
 
-const server = new McpServer({ name: "cs2-mcp", version: "0.8.0" });
+/** Single version source for the server: package.json (keep in step with the mod's csproj <Version>). */
+const SERVER_VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+
+const server = new McpServer({ name: "cs2-mcp", version: SERVER_VERSION });
 
 server.registerTool(
   "cs2_ping",
@@ -81,7 +89,16 @@ server.registerTool(
   },
   async () => {
     try {
-      return jsonResult(await bridgeJson("/ping", 3_000));
+      const ping = (await bridgeJson("/ping", 3_000)) as { version?: string };
+      const bridgeVersion = ping.version ?? "unknown";
+      return jsonResult({
+        ...ping,
+        serverVersion: SERVER_VERSION,
+        versionWarning:
+          bridgeVersion === SERVER_VERSION
+            ? undefined
+            : `bridge mod ${bridgeVersion} and MCP server ${SERVER_VERSION} differ; rebuild/redeploy both from the same checkout`,
+      });
     } catch (err) {
       return errorResult(err);
     }
@@ -244,6 +261,155 @@ registerJsonTool(
   "Electricity (production/consumption/battery/trade), water & sewage (capacity/consumption/trade) " +
     "and garbage accumulation of the loaded city. Compare production vs consumption to spot shortages.",
   "/city/services",
+);
+
+const COVERAGE_SERVICES = [
+  "healthcare",
+  "fireRescue",
+  "police",
+  "park",
+  "post",
+  "education",
+  "emergencyShelter",
+  "welfare",
+  "telecom",
+] as const;
+
+server.registerTool(
+  "cs2_coverage",
+  {
+    title: "Get public service coverage",
+    description:
+      "How well zoned buildings are covered by healthcare, fire & rescue, police, parks/leisure, post, education, " +
+      "emergency shelters, welfare and telecom: per service the number and share of underserved buildings and residents, " +
+      "level buckets (none/low/medium/high on the infoview's own colour scale), a breakdown by zone kind, provider count " +
+      "and worstGaps: clusters of underserved buildings, most residents first, with a center x/z that is a good place for " +
+      "a new service building. Optionally limited to an area (x, z, radius). Coverage updates as the simulation runs.",
+    inputSchema: {
+      service: z
+        .array(z.enum(COVERAGE_SERVICES))
+        .optional()
+        .describe("Services to report (default all)"),
+      x: z.number().optional().describe("Area center X (with z and radius)"),
+      z: z.number().optional().describe("Area center Z"),
+      radius: z.number().min(8).optional().describe("Area radius in meters"),
+      minLevel: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe("Buildings below this level (0-1) count as underserved (default 0.34 = none or low). Telecom uses the game's happiness baseline instead"),
+      cellSize: z.number().min(64).max(2048).optional().describe("Gap cluster cell size in meters (default 256)"),
+      gaps: z.number().int().min(0).max(50).optional().describe("Max worstGaps per service (default 8)"),
+      providers: z.boolean().optional().describe("Also list the provider buildings with their range and capacity"),
+      limit: z.number().int().min(1).max(200).optional().describe("Max providers listed per service (default 30)"),
+    },
+  },
+  async ({ service, x, z: zCoord, radius, minLevel, cellSize, gaps, providers, limit }) => {
+    const params = new URLSearchParams();
+    if (service?.length) params.set("service", service.join(","));
+    if (x !== undefined && zCoord !== undefined) {
+      params.set("x", String(x));
+      params.set("z", String(zCoord));
+      if (radius !== undefined) params.set("radius", String(radius));
+    }
+    if (minLevel !== undefined) params.set("minLevel", String(minLevel));
+    if (cellSize !== undefined) params.set("cellSize", String(cellSize));
+    if (gaps !== undefined) params.set("gaps", String(gaps));
+    if (providers) params.set("providers", "true");
+    if (limit !== undefined) params.set("limit", String(limit));
+    const query = params.toString();
+    try {
+      return jsonResult(await bridgeJson(query ? `/city/coverage?${query}` : "/city/coverage", 20_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_economy",
+  {
+    title: "Get economy and production chains",
+    description:
+      "The city economy beyond demand: for every traded resource its production, consumption, net balance, local " +
+      "production capacity, stored amount, import/export and which consumers use it (citizens, retail, industry, " +
+      "offices, service upkeep...), biggest shortfall first; plus a company census per kind (commercial, office, " +
+      "industrial, extractor, storage) with workers vs jobs, average profitability and companies still looking for a building.",
+    inputSchema: {
+      all: z.boolean().optional().describe("Also list resources with no activity"),
+    },
+  },
+  async ({ all }) => {
+    try {
+      return jsonResult(await bridgeJson(all ? "/city/economy?all=true" : "/city/economy", 20_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+registerJsonTool(
+  "cs2_happiness",
+  "Get happiness factors",
+  "Why citizens are happy or unhappy: the city info panel's happiness factors (taxes, pollution, services, " +
+    "homelessness, unemployment...) with their effect split into health and wellbeing, worst first, plus the " +
+    "average happiness and health.",
+  "/city/happiness",
+);
+
+registerJsonTool(
+  "cs2_progression",
+  "Get milestone progress",
+  "XP, the achieved milestone, progress to the next one and what it rewards (money, development points, map " +
+    "tiles, loan limit), and the development points available to spend.",
+  "/city/progression",
+);
+
+server.registerTool(
+  "cs2_dev_tree",
+  {
+    title: "List the development tree",
+    description:
+      "Development tree nodes grouped by service with cost, purchased state and why a node cannot be bought yet " +
+      "(points, previous node, service not unlocked). Filter by service or show only what can be bought now.",
+    inputSchema: {
+      service: z.string().optional().describe("Service name substring, e.g. Healthcare, Transportation"),
+      available: z.boolean().optional().describe("Only nodes that can be purchased now"),
+    },
+  },
+  async ({ service, available }) => {
+    const params = new URLSearchParams();
+    if (service) params.set("service", service);
+    if (available) params.set("available", "true");
+    const query = bridgeQueryString(params);
+    try {
+      return jsonResult(await bridgeJson(query ? `/city/dev-tree?${query}` : "/city/dev-tree"));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_dev_tree_purchase",
+  {
+    title: "Buy a development tree node",
+    description:
+      "Spend development points on a node from cs2_dev_tree, exactly like the development tree panel (the game " +
+      "checks points and prerequisites). Irreversible: points are not refunded.",
+    inputSchema: {
+      node: z.string().describe("Node name from cs2_dev_tree"),
+    },
+  },
+  async ({ node }) => {
+    const params = new URLSearchParams({ node });
+    try {
+      return jsonResult(await bridgeJson(`/city/dev-tree/purchase?${bridgeQueryString(params)}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
 );
 
 registerJsonTool(
@@ -412,6 +578,7 @@ server.registerTool(
       "(collisions, terrain, water) and the call fails with an explanation if blocked. Costs city money " +
       "like a normal player action. Verify the result with cs2_screenshot or cs2_list_buildings.",
     inputSchema: {
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       prefab: z.string().describe("Exact prefab name from cs2_find_prefabs"),
       x: z.number().describe("World X coordinate (meters)"),
       z: z.number().describe("World Z coordinate (meters)"),
@@ -419,10 +586,11 @@ server.registerTool(
       force: z.boolean().optional().describe("Place even if the prefab is milestone-locked"),
     },
   },
-  async ({ prefab, x, z, rotation, force }) => {
+  async ({ prefab, x, z, rotation, force, dryRun }) => {
     const params = new URLSearchParams({ prefab, x: String(x), z: String(z) });
     if (rotation !== undefined) params.set("rotation", String(rotation));
     if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/place?${params.toString()}`, 15_000));
     } catch (err) {
@@ -441,6 +609,7 @@ server.registerTool(
       "Straight by default; pass cx/cz for a curved segment through that control point. Length 8-1500m. " +
       "Endpoints on existing nodes connect to them. Costs city money; fails with an explanation if blocked.",
     inputSchema: {
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       prefab: z.string().describe("Exact prefab name from cs2_find_prefabs (category road or net)"),
       x1: z.number().describe("Start X (meters)"),
       z1: z.number().describe("Start Z (meters)"),
@@ -453,7 +622,7 @@ server.registerTool(
       force: z.boolean().optional().describe("Build even if the prefab is milestone-locked"),
     },
   },
-  async ({ prefab, x1, z1, x2, z2, cx, cz, e1, e2, force }) => {
+  async ({ prefab, x1, z1, x2, z2, cx, cz, e1, e2, force, dryRun }) => {
     const params = new URLSearchParams({
       prefab,
       x1: String(x1),
@@ -466,6 +635,7 @@ server.registerTool(
     if (e1 !== undefined) params.set("e1", String(e1));
     if (e2 !== undefined) params.set("e2", String(e2));
     if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road?${params.toString()}`, 15_000));
     } catch (err) {
@@ -515,6 +685,7 @@ server.registerTool(
       "along roads (build a road first). Pass zone='None' to remove zoning. Buildings grow on zoned " +
       "cells while the simulation runs, driven by RCI demand (check cs2_demand).",
     inputSchema: {
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       zone: z.string().describe("Exact zone name from cs2_list_zones, or 'None' to dezone"),
       x: z.number().describe("Center X (meters)"),
       z: z.number().describe("Center Z (meters)"),
@@ -522,10 +693,11 @@ server.registerTool(
       force: z.boolean().optional().describe("Zone even if the zone type is milestone-locked"),
     },
   },
-  async ({ zone, x, z: zCoord, radius, force }) => {
+  async ({ zone, x, z: zCoord, radius, force, dryRun }) => {
     const params = new URLSearchParams({ zone, x: String(x), z: String(zCoord) });
     if (radius !== undefined) params.set("radius", String(radius));
     if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/zone?${params.toString()}`));
     } catch (err) {
@@ -543,15 +715,17 @@ server.registerTool(
       "soundBarrier, parking, lighting, medianGrass, medianTrees. Combine multiple with commas. " +
       "The segment is recreated with the new composition via the game's tool pipeline.",
     inputSchema: {
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       index: z.number().int().describe("Road segment entity index"),
       version: z.number().int().describe("Road segment entity version"),
       upgrades: z.string().describe("Comma-separated upgrade names, e.g. 'grass,lighting'"),
       side: z.enum(["both", "left", "right"]).optional().describe("Which side for side upgrades (default both)"),
     },
   },
-  async ({ index, version, upgrades, side }) => {
+  async ({ index, version, upgrades, side, dryRun }) => {
     const params = new URLSearchParams({ index: String(index), version: String(version), upgrades });
     if (side) params.set("side", side);
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/upgrade?${params.toString()}`, 15_000));
     } catch (err) {
@@ -598,13 +772,132 @@ server.registerTool(
       "Demolish (bulldoze) one building (from cs2_list_buildings) or road segment (from cs2_list_roads) " +
       "identified by its entity index and version. Irreversible 鈥?double-check the target first.",
     inputSchema: {
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       index: z.number().int().describe("Entity index from cs2_list_buildings"),
       version: z.number().int().describe("Entity version from cs2_list_buildings"),
     },
   },
+  async ({ index, version, dryRun }) => {
+    try {
+      return jsonResult(await bridgeJson(`/build/demolish?index=${index}&version=${version}${dryRun ? "&dryRun=true" : ""}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_move_building",
+  {
+    title: "Relocate a building",
+    description:
+      "Move an existing building or object to a new spot and/or rotation WITHOUT demolishing it, exactly like the " +
+      "game's Relocate button: same entity id, and the building keeps its upgrades, workers, vehicles and stats. " +
+      "Allowed for the same objects the game allows (service buildings, signature buildings, service upgrades, " +
+      "parks, props); zoned growables and hydro dams cannot be moved. Give x/z (new position) or dx/dz (offset) " +
+      "and/or rotation in degrees (default keeps the current rotation). The game validates the new spot " +
+      "(overlap, water, slope, road access...); dryRun=true only checks whether the move would be accepted.",
+    inputSchema: {
+      index: z.number().int().describe("Entity index (cs2_list_buildings / cs2_buildings_near)"),
+      version: z.number().int().describe("Entity version"),
+      x: z.number().optional().describe("New X (with z)"),
+      z: z.number().optional().describe("New Z (with x)"),
+      dx: z.number().optional().describe("Offset along X in meters (instead of x/z)"),
+      dz: z.number().optional().describe("Offset along Z in meters (instead of x/z)"),
+      rotation: z.number().optional().describe("New facing in degrees (same convention as cs2_place_building); default keeps it"),
+      dryRun: z.boolean().optional().describe("Only check whether the game accepts the move"),
+    },
+  },
+  async ({ index, version, x, z: zCoord, dx, dz, rotation, dryRun }) => {
+    const params = new URLSearchParams({ index: String(index), version: String(version) });
+    if (x !== undefined) params.set("x", String(x));
+    if (zCoord !== undefined) params.set("z", String(zCoord));
+    if (dx !== undefined) params.set("dx", String(dx));
+    if (dz !== undefined) params.set("dz", String(dz));
+    if (rotation !== undefined) params.set("rotation", String(rotation));
+    if (dryRun) params.set("dryRun", "true");
+    try {
+      return jsonResult(await bridgeJson(`/build/move?${params.toString()}`, 15_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_building_upgrades",
+  {
+    title: "List a building's upgrades",
+    description:
+      "The upgrade menu of a service building: every upgrade it can get (extension wings, extra garages, parking, " +
+      "solar panels...) with cost, XP, locked state, whether a one-per-building upgrade is already built and how it " +
+      "is placed (fixed spot vs. beside the building), plus the upgrades already installed with their entity ids.",
+    inputSchema: {
+      index: z.number().int().describe("Building entity index"),
+      version: z.number().int().describe("Building entity version"),
+    },
+  },
   async ({ index, version }) => {
     try {
-      return jsonResult(await bridgeJson(`/build/demolish?index=${index}&version=${version}`));
+      return jsonResult(await bridgeJson(`/city/building-upgrades?index=${index}&version=${version}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_place_upgrade",
+  {
+    title: "Install a building upgrade",
+    description:
+      "Install an upgrade from cs2_building_upgrades on a service building through the game's upgrade pipeline " +
+      "(cost, unlocks and validation by the game). Extensions go to their fixed spot automatically; upgrades placed " +
+      "beside the building (parking lots, extra areas) need x/z and optionally rotation. dryRun=true only checks it " +
+      "and reports the cost. Remove an installed upgrade with cs2_demolish on its entity.",
+    inputSchema: {
+      index: z.number().int().describe("Building entity index"),
+      version: z.number().int().describe("Building entity version"),
+      upgrade: z.string().describe("Upgrade prefab name from cs2_building_upgrades"),
+      x: z.number().optional().describe("X for upgrades placed beside the building"),
+      z: z.number().optional().describe("Z for upgrades placed beside the building"),
+      rotation: z.number().optional().describe("Facing in degrees (default: the building's)"),
+      force: z.boolean().optional().describe("Install even if the upgrade is locked"),
+      dryRun: z.boolean().optional().describe("Only validate and report the cost"),
+    },
+  },
+  async ({ index, version, upgrade, x, z: zCoord, rotation, force, dryRun }) => {
+    const params = new URLSearchParams({ index: String(index), version: String(version), upgrade });
+    if (x !== undefined) params.set("x", String(x));
+    if (zCoord !== undefined) params.set("z", String(zCoord));
+    if (rotation !== undefined) params.set("rotation", String(rotation));
+    if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
+    try {
+      return jsonResult(await bridgeJson(`/build/service-upgrade?${bridgeQueryString(params)}`, 15_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_rename",
+  {
+    title: "Rename a building, district, street or line",
+    description:
+      "Give a building, district, transit line or street a custom name, like the game's rename field. For a street " +
+      "pass any of its road segments; the whole named street is renamed. An empty name restores the default name.",
+    inputSchema: {
+      index: z.number().int().describe("Entity index"),
+      version: z.number().int().describe("Entity version"),
+      name: z.string().max(64).describe("New name ('' restores the default)"),
+    },
+  },
+  async ({ index, version, name }) => {
+    const params = new URLSearchParams({ index: String(index), version: String(version), name });
+    try {
+      return jsonResult(await bridgeJson(`/build/rename?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -924,13 +1217,15 @@ server.registerTool(
       "Draw a district over an area by polygon corners (3-32 points, world meters). Buildings and roads " +
       "inside get assigned to it; district policies can then be applied to just that area.",
     inputSchema: {
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       nodes: z.string().describe("Polygon corners 'x1,z1;x2,z2;x3,z3;...' (counter-clockwise)"),
       prefab: z.string().optional().describe("District prefab name (default: the standard district)"),
     },
   },
-  async ({ nodes, prefab }) => {
+  async ({ nodes, prefab, dryRun }) => {
     const params = new URLSearchParams({ nodes });
     if (prefab) params.set("prefab", prefab);
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/district?${params.toString()}`, 15_000));
     } catch (err) {
@@ -1335,7 +1630,9 @@ server.registerTool(
       "otherwise splits the nearest compatible segment at that point (a track never joins a road). Ends with " +
       "nothing in range start freely on the terrain. Straight, or curved through cx/cz (needed where tracks must " +
       "leave a junction smoothly). Use for new road links and ramps, and for track spurs to station tracks (find " +
-      "those with cs2_road_graph allNets). Validated by the game; costs money like a player build.",
+      "those with cs2_building_connections). smooth=true makes each snapped end continue the direction of what it " +
+      "joins (merge/diverge ramps onto a highway, track continuing a station's track end). Validated by the game; " +
+      "costs money like a player build.",
     inputSchema: {
       prefab: z.string().describe("Exact network prefab name (cs2_find_prefabs category road or net)"),
       x1: z.number().describe("Start X"),
@@ -1347,10 +1644,11 @@ server.registerTool(
       snap: z.number().min(0).max(50).optional().describe("Snap distance in meters (default 8; 0 = never snap)"),
       e1: z.number().optional().describe("Elevation of a free (unsnapped) start in meters: >0 bridge/flyover, <0 tunnel"),
       e2: z.number().optional().describe("Elevation of a free (unsnapped) end in meters"),
+      smooth: z.boolean().optional().describe("Tangent-continuous ends: follow the split road or continue a dead end (not with cx/cz)"),
       force: z.boolean().optional().describe("Build even if the prefab is milestone-locked"),
     },
   },
-  async ({ prefab, x1, z1, x2, z2, cx, cz, snap, e1, e2, force }) => {
+  async ({ prefab, x1, z1, x2, z2, cx, cz, snap, e1, e2, smooth, force }) => {
     const params = new URLSearchParams({
       prefab,
       x1: String(x1),
@@ -1363,9 +1661,70 @@ server.registerTool(
     if (snap !== undefined) params.set("snap", String(snap));
     if (e1 !== undefined) params.set("e1", String(e1));
     if (e2 !== undefined) params.set("e2", String(e2));
+    if (smooth) params.set("smooth", "true");
     if (force) params.set("force", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road/connect?${bridgeQueryString(params)}`, 15_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_building_connections",
+  {
+    title: "Open track/road ends of a building",
+    description:
+      "The open ends of a building's own networks (train/subway/tram tracks of stations and depots, road and path " +
+      "stubs, harbor waterways) that still need joining to the city, with position, elevation, network type and the " +
+      "direction they point out of the building. Join each with cs2_connect_road (x1/z1 on the end, smooth=true). " +
+      "Use right after placing a station, depot or harbor.",
+    inputSchema: {
+      index: z.number().int().describe("Building entity index"),
+      version: z.number().int().describe("Building entity version"),
+    },
+  },
+  async ({ index, version }) => {
+    try {
+      return jsonResult(await bridgeJson(`/city/building-connections?index=${index}&version=${version}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_terraform",
+  {
+    title: "Landscape the terrain",
+    description:
+      "Raise, lower, level or soften the terrain with the game's landscaping brush held at a point for `seconds` of " +
+      "brush time (repeat for a stronger effect). level needs an absolute target height (read heights with " +
+      "cs2_terrain). Validated by the game (owned tiles only); dryRun=true only checks it. Changing terrain under " +
+      "buildings and roads can break them; prefer open ground.",
+    inputSchema: {
+      type: z.enum(["raise", "lower", "level", "soften"]).describe("Brush type"),
+      x: z.number().describe("Brush center X"),
+      z: z.number().describe("Brush center Z"),
+      size: z.number().min(10).max(1000).optional().describe("Brush size in meters (default 100)"),
+      strength: z.number().min(0.01).max(1).optional().describe("Brush strength 0-1 (default 0.5)"),
+      seconds: z.number().min(0.1).max(5).optional().describe("Brush time in seconds (default 1)"),
+      height: z.number().optional().describe("Target height in meters for level"),
+      force: z.boolean().optional().describe("Use the tool even if it is locked"),
+      dryRun: z.boolean().optional().describe("Only validate"),
+    },
+  },
+  async ({ type, x, z: zCoord, size, strength, seconds, height, force, dryRun }) => {
+    const params = new URLSearchParams({ type, x: String(x), z: String(zCoord) });
+    if (size !== undefined) params.set("size", String(size));
+    if (strength !== undefined) params.set("strength", String(strength));
+    if (seconds !== undefined) params.set("seconds", String(seconds));
+    if (height !== undefined) params.set("height", String(height));
+    if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
+    try {
+      return jsonResult(await bridgeJson(`/build/terraform?${params.toString()}`, 15_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -1583,13 +1942,15 @@ server.registerTool(
       "tools: lights = traffic lights, nolights = remove traffic lights, stop = all-way stop, default = the " +
       "game's automatic choice. Needs a junction of 3 or more roads. Save first: this recreates the junction.",
     inputSchema: {
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       index: z.number().int().describe("Junction (node) entity index"),
       version: z.number().int().describe("Junction (node) entity version"),
       mode: z.enum(["lights", "nolights", "stop", "default"]).describe("Control to apply"),
     },
   },
-  async ({ index, version, mode }) => {
+  async ({ index, version, mode, dryRun }) => {
     const params = new URLSearchParams({ index: String(index), version: String(version), mode });
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/junction?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
@@ -1652,6 +2013,8 @@ server.registerTool(
   },
 );
 
+registerPromptsAndResources(server, bridgeJson);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`cs2-mcp 0.8.0 running on stdio (bridge: ${BRIDGE_URL})`);
+console.error(`cs2-mcp ${SERVER_VERSION} running on stdio (bridge: ${BRIDGE_URL})`);

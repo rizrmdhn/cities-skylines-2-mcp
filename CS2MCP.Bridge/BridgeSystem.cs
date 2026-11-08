@@ -111,6 +111,12 @@ namespace CS2MCP
             }
         }
 
+        /// <summary>Read-only component lookup for request handlers (they run inside OnUpdate).</summary>
+        public Unity.Entities.ComponentLookup<T> ReadOnlyLookup<T>() where T : unmanaged, Unity.Entities.IComponentData
+        {
+            return GetComponentLookup<T>(true);
+        }
+
         public void StopServer()
         {
             m_Server?.Stop();
