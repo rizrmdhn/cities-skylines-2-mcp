@@ -141,6 +141,7 @@ namespace CS2MCP
             }
 
             float2 center = new float2(x, z);
+            bool dryRun = IsDryRun(request);
             int cellsChanged = 0;
             int blocksTouched = 0;
 
@@ -155,7 +156,7 @@ namespace CS2MCP
                         continue;
                     }
 
-                    DynamicBuffer<Cell> cells = EntityManager.GetBuffer<Cell>(blockEntity);
+                    DynamicBuffer<Cell> cells = EntityManager.GetBuffer<Cell>(blockEntity, isReadOnly: dryRun);
                     bool blockChanged = false;
                     for (int cellZ = 0; cellZ < block.m_Size.y; cellZ++)
                     {
@@ -181,17 +182,21 @@ namespace CS2MCP
                             {
                                 continue;
                             }
-                            cell.m_Zone = targetZone;
-                            cells[index] = cell;
                             cellsChanged++;
                             blockChanged = true;
+                            if (dryRun)
+                            {
+                                continue;
+                            }
+                            cell.m_Zone = targetZone;
+                            cells[index] = cell;
                         }
                     }
 
                     if (blockChanged)
                     {
                         blocksTouched++;
-                        if (!EntityManager.HasComponent<Game.Common.Updated>(blockEntity))
+                        if (!dryRun && !EntityManager.HasComponent<Game.Common.Updated>(blockEntity))
                         {
                             EntityManager.AddComponent<Game.Common.Updated>(blockEntity);
                         }
@@ -201,6 +206,7 @@ namespace CS2MCP
 
             return BridgeResponse.Json(new
             {
+                dryRun,
                 zone = resolvedName,
                 center = new { x, z },
                 radius,
@@ -208,7 +214,9 @@ namespace CS2MCP
                 blocksTouched,
                 note = cellsChanged == 0
                     ? "no zonable cells found in radius - zone cells only exist along roads (build a road first) and must be unoccupied"
-                    : "zoned; buildings will grow while the simulation runs if demand exists",
+                    : dryRun
+                        ? "dry run: these cells would be zoned; nothing was changed"
+                        : "zoned; buildings will grow while the simulation runs if demand exists",
             });
         }
     }

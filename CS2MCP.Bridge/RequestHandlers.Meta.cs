@@ -306,7 +306,7 @@ namespace CS2MCP
             }
 
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueueArea(prefabEntity, prefab, nodes, request))
+            if (!tool.TryQueueArea(prefabEntity, prefab, nodes, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }

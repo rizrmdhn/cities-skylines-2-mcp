@@ -137,9 +137,18 @@ namespace CS2MCP
             {
                 return BridgeResponse.Error(401, "missing or invalid " + TokenHeader + " header");
             }
+            if (!BridgeOptions.Enabled)
+            {
+                return BridgeResponse.Error(503, "the bridge is switched off in the game's Options > CS2MCP page");
+            }
             if (IsMutatingPath(request.Path) && request.Method != "POST")
             {
                 return BridgeResponse.Error(405, request.Path + " changes game state and requires POST");
+            }
+            if (IsMutatingPath(request.Path) && BridgeOptions.ReadOnly)
+            {
+                return BridgeResponse.Error(403, request.Path + " is refused: read-only mode is on (game Options > CS2MCP" +
+                    (BridgeOptions.ReadOnlyForcedByEnvironment ? ", forced by CS2MCP_READONLY" : "") + ")");
             }
 
             m_EnqueueToMainThread(request);
@@ -183,6 +192,7 @@ namespace CS2MCP
                 || path.EndsWith("/set", StringComparison.Ordinal)
                 || path == "/game/save"
                 || path == "/city/tiles/buy"
+                || path == "/city/dev-tree/purchase"
                 || path == "/transit/stops/place"
                 || path == "/transit/lines/create"
                 || path == "/transit/lines/delete";
@@ -212,6 +222,8 @@ namespace CS2MCP
                 version = Mod.Version,
                 gameMode,
                 isLoading,
+                bridgeEnabled = BridgeOptions.Enabled,
+                readOnly = BridgeOptions.ReadOnly,
             });
         }
 

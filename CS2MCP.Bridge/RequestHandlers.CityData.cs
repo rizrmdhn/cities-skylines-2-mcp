@@ -53,7 +53,7 @@ namespace CS2MCP
                 {
                     accumulationRate = garbage.garbageAccumulation,
                 },
-                note = "healthcare/education coverage: query /city/statistics (e.g. type=EducationCount) until dedicated endpoints land",
+                note = "public service coverage (healthcare, education, police, fire, parks, telecom...): see /city/coverage",
             });
         }
 

@@ -66,7 +66,12 @@ The MCP server loads `mcp-server/.env` via [dotenv](https://github.com/motdotla/
 | `CS2_BRIDGE_URL` | MCP server | `http://127.0.0.1:8642` | Address of the bridge mod |
 | `CS2MCP_PORT` | game process | `8642` | Bridge listen port (change both together) |
 | `CS2MCP_TOKEN` | game process **and** MCP server | *(unset)* | Optional shared secret sent as `X-CS2MCP-Token`; when set for the game, every route except `/ping` requires it. Independently, requests with an `Origin` header or a non-loopback `Host` are always rejected, and state-changing routes require POST |
+| `CS2MCP_READONLY` | game process | *(unset)* | `1` forces read-only mode: every state-changing route is refused with 403 (same as the in-game option) |
 | `CS2_PATH` | build time | auto-probed | Game install folder |
+
+### In-game options
+
+**Options > CS2MCP** in the game has two switches: **Accept AI requests** (off = every route except `/ping` answers 503) and **Read-only mode** (AI clients can read data, move the camera and take screenshots, but every build, demolish, zoning, money, policy, simulation or save request is refused). `cs2_ping` reports both, plus the bridge and MCP server versions with a warning when they differ.
 
 ## Using with Claude
 
@@ -91,7 +96,7 @@ claude mcp add cs2 -- node <repo-path>\mcp-server\dist\index.js
 
 Start the game, load a save, then ask Claude: "How are my city's finances?", "Zone a residential area by the river", "Build a road connecting the industrial area to the highway".
 
-## Tool Reference (62 tools)
+## Tool Reference (77 tools)
 
 **State & view**
 
@@ -110,6 +115,7 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_demand` | RCI demand + demand factors (internal 0-255 scale; refreshes only while simulating) |
 | `cs2_budget` | Budget breakdown: 14 income / 15 expense sources |
 | `cs2_city_services` | Electricity, water & sewage, garbage status |
+| `cs2_coverage` | Service coverage of zoned buildings (healthcare, fire, police, parks, post, education, shelters, welfare, telecom): underserved buildings/residents, level buckets on the infoview scale, providers and the worst coverage gaps to place new service buildings |
 | `cs2_labor` | Employment, unemployment, jobs by education level, age structure |
 | `cs2_statistics` | Time series for 60+ statistics (32 samples per in-game day) |
 | `cs2_terrain` | Whole-map heightmap + water depth grid |
@@ -120,6 +126,10 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_vehicles` | Census of driving vehicles by type and destination, what stopped vehicles wait for, the queue heads holding traffic up and any gridlock loops |
 | `cs2_road_graph` | Road segments of an area with their junctions, direction, flow and traffic lights (optionally every network, incl. station tracks) |
 | `cs2_inspect` | Single-entity detail (residents/employees/status flags) |
+| `cs2_happiness` | The city info panel's happiness factors (taxes, pollution, services, homelessness...) with their health/wellbeing effect, worst first |
+| `cs2_economy` | Per-resource production, consumption, capacity, storage, import/export and consumers (the production panel's numbers), plus a company census with job fill and profitability |
+| `cs2_progression` | XP, achieved milestone, progress and rewards of the next one, development points |
+| `cs2_dev_tree` / `cs2_dev_tree_purchase` | Development tree nodes with cost and why they can't be bought yet / buy a node like the development tree panel |
 
 **Construction**
 
@@ -131,14 +141,21 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_upgrade_road` | Road upgrades: grass/trees/wide sidewalk/sound barrier/parking/lighting/median |
 | `cs2_set_junction_control` | Set a junction to traffic lights, no lights, an all-way stop or the game default (the intersection tools' node upgrades) |
 | `cs2_replace_road` | Change the road type of existing segments in place (the road tool's Replace mode): widen a highway, make a street one-way |
-| `cs2_connect_road` | Build a road or track whose ends snap to existing junctions or split existing segments (like the road tool's snapping), optionally raised or lowered |
+| `cs2_connect_road` | Build a road or track whose ends snap to existing junctions or split existing segments (like the road tool's snapping), optionally raised or lowered; `smooth` makes the ends continue the direction of what they join (merge/diverge ramps, track leaving a station) |
+| `cs2_building_connections` | Open track/road/path/waterway ends of a station, depot or harbor that still need joining, with their outward direction |
+| `cs2_building_upgrades` / `cs2_place_upgrade` | A service building's upgrade menu (cost, locked, already built, placement) / install an upgrade through the game's upgrade pipeline |
+| `cs2_terraform` | Landscaping brush: raise, lower, level (to a height) or soften at a point, validated by the game |
+| `cs2_rename` | Rename a building, district, street or transit line (empty name restores the default) |
 | `cs2_prefab_info` | Footprint, size, placement rules and cost of a building, or width and layers of a network |
 | `cs2_place_shoreline` | Place a harbor, pump or other shoreline building on the water's edge, snapped like the game's placement tool |
 | `cs2_place_roadside` | Place a station, depot or service building flush against a road segment, facing it |
 | `cs2_buildings_near` | Buildings around a point with kind, footprint and facing, to find free spots or what to clear |
 | `cs2_zone_area` / `cs2_list_zones` | Paint zoning (`None` to clear) and list zone types |
 | `cs2_demolish` | Demolish buildings/segments/trees/districts (bulldozer pipeline) |
+| `cs2_move_building` | Relocate a service/signature building, service upgrade, park or prop to a new position/rotation without demolishing it (the game's Relocate pipeline: same entity, upgrades, workers and vehicles kept; validated by the game, `dryRun` to probe) |
 | `cs2_list_buildings` / `cs2_list_roads` / `cs2_list_objects` | Entity listings (ids, coordinates) |
+
+Every construction tool (place, road, road upgrade, junction, district, zone, demolish, move, upgrade, terraform) accepts `dryRun=true`: the game validates the change and reports whether it would be accepted and what it costs, without applying it.
 
 **Finance & policy**
 
@@ -174,6 +191,10 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_run_simulation` | Timed run: simulate N in-game hours, then auto-pause |
 | `cs2_save_game` | Trigger a save (recommended before large AI operations) |
 
+### Prompts and resources
+
+Besides tools, the server offers MCP **prompts** (ready-made workflows): `city_health_check` (read-only audit), `fix_service_coverage`, `connect_station`, `plan_transit_line`, `balance_budget`; and **resources**: `cs2://guide` (coordinates, ids, safe-change rules, typical flows) and live JSON snapshots `cs2://game/state`, `cs2://city/overview`, `cs2://city/budget`, `cs2://city/demand`, `cs2://city/services`, `cs2://city/coverage`.
+
 ## Troubleshooting
 
 - **`cs2_ping` unreachable**: the mod is not loaded. Check `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Logs\CS2MCP.log` (should contain `bridge listening on ...`); if the file is missing, check `Player.log` in the same folder.
@@ -183,9 +204,9 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 
 ## Known Limitations / Roadmap
 
-- Terraforming is not implemented yet
-- Transit: stops can be placed for bus/tram (roadside); train/metro stops are station buildings (place with `cs2_place_building`) that must be connected by tracks. Lines only get vehicles when a depot of the same type exists and the simulation runs
-- Ramps can only connect at segment endpoints (nodes); mid-segment smooth merges are not supported yet
+- Terraforming covers the height brushes (raise, lower, level, soften); slope and resource brushes are not exposed
+- Transit: stops can be placed for bus/tram (roadside); train/metro stops are station buildings (place with `cs2_place_building` or `cs2_place_roadside`, then join their tracks via `cs2_building_connections` + `cs2_connect_road smooth=true`). Ship, ferry, airplane and cargo lines are not supported yet. Lines only get vehicles when a depot of the same type exists and the simulation runs
+- Building modules (e.g. port areas) are listed by `cs2_building_upgrades` but cannot be placed yet
 - Screenshots capture the game's current rendering: with a road-tool panel open the game renders roads in white outline mode
 
 ## Disclaimer & Credits

@@ -59,6 +59,30 @@ namespace CS2MCP
                     return GetDemand();
                 case "/city/budget":
                     return GetBudget();
+                case "/city/building-upgrades":
+                    return ListBuildingUpgrades(request);
+                case "/build/service-upgrade":
+                    return PlaceServiceUpgrade(request);
+                case "/build/rename":
+                    return RenameEntity(request);
+                case "/build/terraform":
+                    return Terraform(request);
+                case "/city/building-connections":
+                    return ListBuildingConnections(request);
+                case "/city/happiness":
+                    return GetHappinessFactors();
+                case "/city/progression":
+                    return GetProgression();
+                case "/city/dev-tree":
+                    return GetDevTree(request);
+                case "/city/dev-tree/purchase":
+                    return PurchaseDevTreeNode(request);
+                case "/city/economy":
+                    return GetEconomy(request);
+                case "/build/move":
+                    return MoveObject(request);
+                case "/city/coverage":
+                    return GetCoverage(request);
                 case "/city/services":
                     return GetServices();
                 case "/city/labor":
@@ -366,6 +390,12 @@ namespace CS2MCP
         {
             ScreenshotRunner.Ensure().Capture(request);
             return null;
+        }
+
+        /// <summary>dryRun=true: run the game's validation (and cost) for a build operation without applying it.</summary>
+        private static bool IsDryRun(BridgeRequest request)
+        {
+            return request.TryGetBool("dryRun", out bool dryRun) && dryRun;
         }
 
         private bool TryGetCity(out Entity city, out BridgeResponse error)

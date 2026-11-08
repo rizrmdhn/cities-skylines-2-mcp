@@ -77,7 +77,7 @@ namespace CS2MCP
             flags.m_General = (flags.m_General & ~kJunctionControlFlags) | add;
 
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueueNodeUpgrade(node, mode.Trim().ToLowerInvariant(), flags, request))
+            if (!tool.TryQueueNodeUpgrade(node, mode.Trim().ToLowerInvariant(), flags, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
