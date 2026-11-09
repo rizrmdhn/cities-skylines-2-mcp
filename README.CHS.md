@@ -176,7 +176,7 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | `cs2_list_transit_stops` | 站点的类型、名称、位置、所属车站、所依附道路及经停线路；`airplane` 列出机场登机口（客运或货运）与地图的航空外部连接 |
 | `cs2_place_transit_stop` | 通过物件工具管线放置路边公交/有轨电车站（由游戏依附、吸附并校验） |
 | `cs2_create_transit_line` | 经由有序站点（站点 ID、车站建筑或吸附到站点的坐标）通过路线工具管线建线；等待游戏寻路完成，不可达的路段会被拒绝 |
-| `cs2_create_route` | 客运航线，或飞机、火车、轮船的货运路线（登机口、货运站、港口、外部连接） |
+| `cs2_create_route` | 飞机、轮船或渡轮客运线路，或飞机、火车、轮船的货运路线（登机口、港口/渡轮码头、货运站、外部连接） |
 | `cs2_list_transit_lines` | 线路及交通面板上的数字（站数、车辆数、车上乘客、使用率、长度、时刻），可选每站候车人数 |
 | `cs2_delete_transit_line` | 与游戏自带删除按钮完全一致地删除线路 |
 | `cs2_line_policies` / `cs2_set_line_policy` | 线路政策（票价、车辆数等），按线路面板的方式设置 |

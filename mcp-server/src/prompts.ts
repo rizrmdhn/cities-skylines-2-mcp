@@ -38,7 +38,8 @@ export const GUIDE = `# Using cs2-mcp
 - Simulation: cs2_run_simulation for N in-game hours (closes milestone popups that would freeze it), cs2_wait_simulation
   until it pauses, then re-read cs2_city_overview / cs2_demand. A run that does not advance: cs2_popups.
 - Specialized industry: cs2_economy (deficits) -> cs2_resources (richest clusters) -> cs2_specialized_area.
-- Air and cargo: cs2_list_transit_stops (gates, cargo terminals, outside connections) -> cs2_create_route.
+- Air, water and cargo lines: cs2_list_transit_stops type=airplane|ship|ferry|train (gates, piers, cargo terminals,
+  outside connections) -> cs2_create_route.
 - Builds stuck on "another build operation is in progress": cs2_tool_status.
 - Why people are unhappy: cs2_happiness; what the economy lacks: cs2_economy; progress: cs2_progression -> cs2_dev_tree.
 - Landscaping: cs2_terraform (raise/lower/level/soften), dryRun first.
@@ -209,9 +210,9 @@ export function registerPromptsAndResources(server: McpServer, bridgeJson: Bridg
     "plan_transit_line",
     {
       title: "Plan a public transport line",
-      description: "Design and create a bus, tram, metro or train line where it is needed most",
+      description: "Design and create a bus, tram, metro, train, ship, ferry or airplane line where it is needed most",
       argsSchema: {
-        type: z.string().optional().describe("bus, tram, metro or train (default bus)"),
+        type: z.string().optional().describe("bus, tram, metro, train, ship, ferry or airplane (default bus)"),
         area: z.string().optional().describe("Optional area hint, e.g. 'x=1200,z=-300' or a district name"),
       },
     },
@@ -221,7 +222,8 @@ export function registerPromptsAndResources(server: McpServer, bridgeJson: Bridg
           `Plan a ${type ?? "bus"} line${area ? ` around ${area}` : ""}. Use cs2_traffic and cs2_buildings_near to find ` +
           "dense residential areas and job centers that are poorly connected, check existing lines with " +
           "cs2_list_transit_lines and stops with cs2_list_transit_stops, place missing stops (cs2_place_transit_stop for " +
-          "bus/tram), create the line with cs2_create_transit_line and make sure a depot of that type exists. Report the " +
+          "bus/tram), create the line with cs2_create_transit_line (ship, ferry and airplane lines: cs2_create_route " +
+          "between existing piers or gates and outside connections) and make sure a depot of that type exists. Report the " +
           "route, stop count and expected usage, and check cs2_list_transit_lines after running the simulation.",
       ),
   );
