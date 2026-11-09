@@ -11,9 +11,8 @@ using Unity.Mathematics;
 namespace CS2MCP
 {
     /// <summary>
-    /// The city economy beyond RCI demand: per-resource production, consumption, capacity, storage
-    /// and import/export (the production panel's sources: CityProductionStatisticSystem,
-    /// CityProductionCapacityCalculationSystem, CountCityStoredResourceSystem) and a company census.
+    /// The city economy beyond RCI demand: the production panel per resource (ProductionPanel in
+    /// RequestHandlers.Production.cs, ported from upstream PR #4) and a company census.
     /// </summary>
     public sealed partial class RequestHandlers
     {
@@ -61,65 +60,7 @@ namespace CS2MCP
             {
                 return error;
             }
-            bool includeAll = request.TryGetBool("all", out bool rawAll) && rawAll;
-
-            CityProductionStatisticSystem statistics = World.GetOrCreateSystemManaged<CityProductionStatisticSystem>();
-            CityProductionCapacityCalculationSystem capacity = World.GetOrCreateSystemManaged<CityProductionCapacityCalculationSystem>();
-            CountCityStoredResourceSystem storedSystem = World.GetOrCreateSystemManaged<CountCityStoredResourceSystem>();
-            NativeArray<int2> consumptionProduction = statistics.GetConsumptionProductions();
-            NativeArray<CityProductionStatisticSystem.CityResourceUsage> usages = statistics.GetCityResourceUsages();
-            NativeArray<int> stored = storedSystem.GetCityStoredResources();
-
-            var resources = new List<(int Net, object Item)>();
-            ResourceIterator iterator = ResourceIterator.GetIterator();
-            while (iterator.Next())
-            {
-                Resource resource = iterator.resource;
-                int index = EconomyUtils.GetResourceIndex(resource);
-                if (index < 0 || index >= consumptionProduction.Length)
-                {
-                    continue;
-                }
-                int consumption = consumptionProduction[index].x;
-                int production = consumptionProduction[index].y;
-                int productionCapacity = capacity.GetProductionCapacity(resource);
-                int storedAmount = index < stored.Length ? stored[index] : 0;
-                CityProductionStatisticSystem.CityResourceUsage usage = index < usages.Length ? usages[index] : default;
-                bool active = consumption != 0 || production != 0 || productionCapacity != 0 || storedAmount != 0 || usage.m_ImportExport != 0;
-                if (!active && !includeAll)
-                {
-                    continue;
-                }
-                int net = production - consumption;
-                resources.Add((net, new
-                {
-                    resource = resource.ToString(),
-                    production,
-                    consumption,
-                    net,
-                    productionCapacity,
-                    stored = storedAmount,
-                    importExport = usage.m_ImportExport,
-                    consumers = new
-                    {
-                        citizens = usage.m_Citizens,
-                        retail = usage.m_Retail,
-                        commercial = usage.m_Commercial,
-                        industrial = usage.m_Industrial,
-                        office = usage.m_Office,
-                        serviceUpkeep = usage.m_ServiceUpkeep,
-                        heating = usage.m_Heating,
-                        buildingLevelUp = usage.m_LevelUp,
-                    },
-                }));
-            }
-            // Biggest shortfalls first: those are what the city imports or lacks.
-            resources.Sort((a, b) => a.Net.CompareTo(b.Net));
-            var resourceItems = new List<object>();
-            foreach (var entry in resources)
-            {
-                resourceItems.Add(entry.Item);
-            }
+            object production = ProductionPanel(request);
 
             var companies = new Dictionary<string, CompanyStats>();
             using (NativeArray<Entity> entities = CompanyQuery.ToEntityArray(Allocator.Temp))
@@ -179,12 +120,12 @@ namespace CS2MCP
 
             return BridgeResponse.Json(new
             {
-                resources = resourceItems,
+                production,
                 companies = companyItems,
-                note = "resources: the production panel's numbers, biggest shortfall (production - consumption) first; " +
-                       "productionCapacity = what local companies could produce; importExport as the game reports it. " +
-                       "companies: averageProfitability is the game's 0-255 Profitability value; lookingForProperty = " +
-                       "companies without a building yet. Values update while the simulation runs. all=true lists idle resources too.",
+                note = "production: the Economy > Production panel's numbers per resource (see production.note), biggest " +
+                       "deficits in production.topDeficits. companies: averageProfitability is the game's 0-255 Profitability " +
+                       "value; lookingForProperty = companies without a building yet. Values update while the simulation runs. " +
+                       "all=true lists idle resources too; resource=<name> shows one.",
             });
         }
     }

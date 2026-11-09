@@ -96,7 +96,7 @@ claude mcp add cs2 -- node <repo-path>\mcp-server\dist\index.js
 
 Start the game, load a save, then ask Claude: "How are my city's finances?", "Zone a residential area by the river", "Build a road connecting the industrial area to the highway".
 
-## Tool Reference (78 tools)
+## Tool Reference (88 tools)
 
 **State & view**
 
@@ -128,7 +128,8 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_road_graph` | Road segments of an area with their junctions, direction, flow and traffic lights (optionally every network, incl. station tracks) |
 | `cs2_inspect` | Single-entity detail (residents/employees/status flags) |
 | `cs2_happiness` | The city info panel's happiness factors (taxes, pollution, services, homelessness...) with their health/wellbeing effect, worst first |
-| `cs2_economy` | Per-resource production, consumption, capacity, storage, import/export and consumers (the production panel's numbers), plus a company census with job fill and profitability |
+| `cs2_economy` | The Economy > Production panel per resource (production, consumption incl. service upkeep and final consumers, balance, import/export, storage, capacity, biggest deficits), plus a company census with job fill and profitability |
+| `cs2_resources` | Natural resource map (fertility, ore, oil, fish, forest) with totals and the richest clusters, to site specialized industry |
 | `cs2_progression` | XP, achieved milestone, progress and rewards of the next one, development points |
 | `cs2_dev_tree` / `cs2_dev_tree_purchase` | Development tree nodes with cost and why they can't be bought yet / buy a node like the development tree panel |
 
@@ -142,6 +143,8 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_upgrade_road` | Road upgrades: grass/trees/wide sidewalk/sound barrier/parking/lighting/median |
 | `cs2_set_junction_control` | Set a junction to traffic lights, no lights, an all-way stop or the game default (the intersection tools' node upgrades) |
 | `cs2_replace_road` | Change the road type of existing segments in place (the road tool's Replace mode): widen a highway, make a street one-way |
+| `cs2_replace_net` | Same for any network family, including train, tram and subway tracks (up to 30 segments, all or nothing) |
+| `cs2_specialized_area` | Specialized industry (agriculture, forestry, ore, oil, fish): list, place the hub with its extractor building, redraw its extractor area |
 | `cs2_connect_road` | Build a road or track whose ends snap to existing junctions or split existing segments (like the road tool's snapping), optionally raised or lowered; `smooth` makes the ends continue the direction of what they join (merge/diverge ramps, track leaving a station) |
 | `cs2_building_connections` | Open track/road/path/waterway ends of a station, depot or harbor that still need joining, with their outward direction |
 | `cs2_building_upgrades` / `cs2_place_upgrade` | A service building's upgrade menu (cost, locked, already built, placement) / install an upgrade through the game's upgrade pipeline |
@@ -163,6 +166,7 @@ Every construction tool (place, road, road upgrade, junction, district, zone, de
 | Tool | Description |
 |---|---|
 | `cs2_get_taxes` / `cs2_set_tax` | Tax rates for the four zone classes (clamped to game limits) |
+| `cs2_resource_tax` | Industrial tax rate per produced resource: read all, or set one |
 | `cs2_policies` / `cs2_set_policy` | City policies (with localized names) |
 | `cs2_service_budgets` / `cs2_set_service_budget` | Per-service budget sliders 50-150% |
 | `cs2_get_fees` / `cs2_set_fee` | Service fees (electricity/water/healthcare/education...) |
@@ -179,6 +183,7 @@ Every construction tool (place, road, road upgrade, junction, district, zone, de
 | `cs2_list_transit_stops` | Stops with type, name, position, owning station, attached road and the lines serving them; `airplane` lists airport gates (passenger or cargo) and the map's air outside connections |
 | `cs2_place_transit_stop` | Place a roadside bus/tram stop via the object tool pipeline (attached, snapped and validated by the game) |
 | `cs2_create_transit_line` | Line through ordered stops (ids, station buildings or points snapped to stops) via the route tool pipeline; waits for the game's pathfinding and refuses unreachable segments |
+| `cs2_create_route` | Passenger airplane line, or cargo route for airplanes, trains or ships (gates, cargo terminals, harbors, outside connections) |
 | `cs2_list_transit_lines` | Lines with the transportation panel's numbers (stops, vehicles, passengers on board, usage, length, schedule) and optional per-stop waiting passengers |
 | `cs2_delete_transit_line` | Delete a line exactly like the game's own delete button |
 | `cs2_line_policies` / `cs2_set_line_policy` | A line's policies (ticket price, vehicle count...) and setting them like the line panel does |
@@ -189,7 +194,12 @@ Every construction tool (place, road, road upgrade, junction, district, zone, de
 | Tool | Description |
 |---|---|
 | `cs2_set_simulation` | Pause / set speed (0-8) |
-| `cs2_run_simulation` | Timed run: simulate N in-game hours, then auto-pause |
+| `cs2_run_simulation` | Timed run: simulate N in-game hours, then auto-pause (closes blocking milestone popups by default) |
+| `cs2_popups` | Blocking popup status: pending milestone/signature dialogs, forced-pause reason |
+| `cs2_dismiss_popups` | Close open milestone/signature popups (releases the forced pause) |
+| `cs2_set_popups` | Turn the game's blocking popups off, or let the mod auto-close them |
+| `cs2_wait_simulation` | Wait (up to 55 s) until a timed run has paused, then return state and overview |
+| `cs2_tool_status` | Bridge tool stages and watchdog reactivations, for builds stuck on "another build operation is in progress" |
 | `cs2_save_game` | Trigger a save (recommended before large AI operations) |
 
 ### Prompts and resources
@@ -200,13 +210,14 @@ Besides tools, the server offers MCP **prompts** (ready-made workflows): `city_h
 
 - **`cs2_ping` unreachable**: the mod is not loaded. Check `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Logs\CS2MCP.log` (should contain `bridge listening on ...`); if the file is missing, check `Player.log` in the same folder.
 - **409 no city loaded**: still in the main menu — load a save first.
+- **Simulation stays paused / `cs2_run_simulation` does nothing**: a milestone or signature-building popup is open; while it is, the game forces speed 0 every frame. `cs2_game_state` reports `forcedPause: "popup"`; close it with `cs2_dismiss_popups`, or disable it with `cs2_set_popups blocking=false`.
 - **Lock states look wrong**: unpause briefly once after loading (lock-related endpoints return a `stalenessWarning` until the simulation has ticked).
 - **Port conflict**: set `CS2MCP_PORT` for the game process and update `CS2_BRIDGE_URL` in `.env` to match.
 
 ## Known Limitations / Roadmap
 
 - Terraforming covers the height brushes (raise, lower, level, soften); slope and resource brushes are not exposed
-- Transit: stops can be placed for bus/tram (roadside); train/metro stops are station buildings (place with `cs2_place_building` or `cs2_place_roadside`, then join their tracks via `cs2_building_connections` + `cs2_connect_road smooth=true`). Ship, ferry, airplane and cargo lines are not supported yet. Lines only get vehicles when a depot of the same type exists and the simulation runs
+- Transit: stops can be placed for bus/tram (roadside); train/metro stops are station buildings (place with `cs2_place_building` or `cs2_place_roadside`, then join their tracks via `cs2_building_connections` + `cs2_connect_road smooth=true`). Airplane lines and cargo routes (air, train, ship) are created with `cs2_create_route`; passenger ship and ferry lines are not supported yet. Lines only get vehicles when a depot of the same type exists and the simulation runs
 - Building modules (e.g. port areas) are listed by `cs2_building_upgrades` but cannot be placed yet
 - Screenshots capture the game's current rendering: with a road-tool panel open the game renders roads in white outline mode
 

@@ -91,6 +91,10 @@ namespace CS2MCP
                     return GetStatistics(request);
                 case "/city/taxes":
                     return GetTaxes();
+                case "/city/taxes/resource":
+                    return HandleResourceTax(request);
+                case "/city/taxes/resource/set":
+                    return HandleResourceTax(request);
                 case "/city/taxes/set":
                     return HandleSetTax(request);
                 case "/city/policies":
@@ -149,6 +153,12 @@ namespace CS2MCP
                     return SimControl(request);
                 case "/sim/run":
                     return SimRun(request);
+                case "/ui/popups":
+                    return GetPopups();
+                case "/ui/popups/dismiss":
+                    return DismissPopups();
+                case "/ui/popups/set":
+                    return SetPopups(request);
                 case "/game/save":
                     return SaveGame(request);
                 case "/city/tiles":
@@ -169,6 +179,8 @@ namespace CS2MCP
                     return PlaceTransitStop(request);
                 case "/transit/lines":
                     return ListTransitLines(request);
+                case "/transit/routes/create":
+                    return CreateRoute(request);
                 case "/transit/lines/create":
                     return CreateTransitLine(request);
                 case "/transit/lines/delete":
@@ -185,6 +197,16 @@ namespace CS2MCP
                     return VehicleCensus(request);
                 case "/city/road-graph":
                     return RoadGraph(request);
+                case "/build/net/replace":
+                    return ReplaceNet(request);
+                case "/build/specialized-area":
+                    return PlaceSpecializedArea(request);
+                case "/city/specialized-areas":
+                    return ListSpecializedAreas(request);
+                case "/city/resources":
+                    return GetNaturalResources(request);
+                case "/tools/status":
+                    return ToolStatus(request);
                 case "/build/road/replace":
                     return ReplaceRoad(request);
                 case "/build/road/connect":
@@ -233,6 +255,8 @@ namespace CS2MCP
                     effectiveSpeed = sim.smoothSpeed,
                     frameIndex = sim.frameIndex,
                     gameDateTime = SafeGameDateTime(time),
+                    // "popup" = a blocking dialog holds speed at 0 (see /ui/popups), "unfocused" = window lost focus
+                    forcedPause = ForcedPauseReason(),
                 };
             }
 

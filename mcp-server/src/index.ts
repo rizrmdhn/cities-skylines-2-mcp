@@ -24,7 +24,7 @@ function isMutatingPath(path: string): boolean {
     path.startsWith("/build/") ||
     path.startsWith("/sim/") ||
     path.endsWith("/set") ||
-    ["/game/save", "/city/tiles/buy", "/city/dev-tree/purchase", "/transit/stops/place", "/transit/lines/create", "/transit/lines/delete"].includes(path)
+    ["/game/save", "/ui/popups/dismiss", "/city/tiles/buy", "/city/dev-tree/purchase", "/transit/stops/place", "/transit/lines/create", "/transit/routes/create", "/transit/lines/delete"].includes(path)
   );
 }
 
@@ -111,7 +111,9 @@ server.registerTool(
     title: "Get game state",
     description:
       "Get the current game state: game mode, whether a city is loaded, city name, " +
-      "simulation pause/speed and the in-game date/time.",
+      "simulation pause/speed and the in-game date/time. simulation.forcedPause is 'popup' while a blocking " +
+      "milestone/signature dialog holds the game at speed 0 (close it with cs2_dismiss_popups) and " +
+      "'unfocused' while the game window lacks focus.",
     inputSchema: {},
   },
   async () => {
@@ -183,7 +185,7 @@ server.registerTool(
     if (speed !== undefined) params.set("speed", String(speed));
     if (paused !== undefined) params.set("paused", String(paused));
     try {
-      return jsonResult(await bridgeJson(`/sim/control?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/sim/control?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -332,17 +334,22 @@ server.registerTool(
   {
     title: "Get economy and production chains",
     description:
-      "The city economy beyond demand: for every traded resource its production, consumption, net balance, local " +
-      "production capacity, stored amount, import/export and which consumers use it (citizens, retail, industry, " +
-      "offices, service upkeep...), biggest shortfall first; plus a company census per kind (commercial, office, " +
-      "industrial, extractor, storage) with workers vs jobs, average profitability and companies still looking for a building.",
+      "The city economy beyond demand. production: the Economy > Production panel per resource (production, " +
+      "consumption = company inputs + service upkeep + the panel's final consumers, balance, households/companies, " +
+      "import/export, stored, capacity) with the biggest deficits and surpluses, to see what the city imports and " +
+      "which specialized industry to build. companies: a census per kind (commercial, office, industrial, extractor, " +
+      "storage) with workers vs jobs, average profitability and companies still looking for a building.",
     inputSchema: {
       all: z.boolean().optional().describe("Also list resources with no activity"),
+      resource: z.string().optional().describe("Only this resource (e.g. Oil, Grain, Wood)"),
     },
   },
-  async ({ all }) => {
+  async ({ all, resource }) => {
+    const params = new URLSearchParams();
+    if (all) params.set("all", "true");
+    if (resource) params.set("resource", resource);
     try {
-      return jsonResult(await bridgeJson(all ? "/city/economy?all=true" : "/city/economy", 20_000));
+      return jsonResult(await bridgeJson(`/city/economy?${bridgeQueryString(params)}`, 20_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -440,7 +447,7 @@ server.registerTool(
     if (parameter !== undefined) params.set("parameter", String(parameter));
     if (samples !== undefined) params.set("samples", String(samples));
     try {
-      return jsonResult(await bridgeJson(`/city/statistics?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/statistics?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -500,7 +507,7 @@ server.registerTool(
     const params = new URLSearchParams({ name, active: String(active) });
     if (adjustment !== undefined) params.set("adjustment", String(adjustment));
     try {
-      return jsonResult(await bridgeJson(`/city/policies/set?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/policies/set?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -530,7 +537,7 @@ server.registerTool(
   async ({ service, percentage }) => {
     const params = new URLSearchParams({ service, percentage: String(percentage) });
     try {
-      return jsonResult(await bridgeJson(`/city/service-budgets/set?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/service-budgets/set?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -560,7 +567,7 @@ server.registerTool(
     if (query) params.set("query", query);
     if (limit) params.set("limit", String(limit));
     try {
-      return jsonResult(await bridgeJson(`/prefabs?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/prefabs?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -592,7 +599,7 @@ server.registerTool(
     if (force) params.set("force", "true");
     if (dryRun) params.set("dryRun", "true");
     try {
-      return jsonResult(await bridgeJson(`/build/place?${params.toString()}`, 15_000));
+      return jsonResult(await bridgeJson(`/build/place?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -605,7 +612,7 @@ server.registerTool(
     title: "Build a road segment",
     description:
       "Build any network segment between two world coordinates (terrain-following): roads, train tracks, " +
-      "pedestrian paths, power lines, pipes 鈥?any prefab from cs2_find_prefabs category 'road' or 'net'. " +
+      "pedestrian paths, power lines, pipes - any prefab from cs2_find_prefabs category 'road' or 'net'. " +
       "Straight by default; pass cx/cz for a curved segment through that control point. Length 8-1500m. " +
       "Endpoints on existing nodes connect to them. Costs city money; fails with an explanation if blocked.",
     inputSchema: {
@@ -637,7 +644,7 @@ server.registerTool(
     if (force) params.set("force", "true");
     if (dryRun) params.set("dryRun", "true");
     try {
-      return jsonResult(await bridgeJson(`/build/road?${params.toString()}`, 15_000));
+      return jsonResult(await bridgeJson(`/build/road?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -661,7 +668,7 @@ server.registerTool(
     if (query) params.set("query", query);
     if (limit) params.set("limit", String(limit));
     try {
-      return jsonResult(await bridgeJson(`/city/buildings?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/buildings?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -699,7 +706,7 @@ server.registerTool(
     if (force) params.set("force", "true");
     if (dryRun) params.set("dryRun", "true");
     try {
-      return jsonResult(await bridgeJson(`/build/zone?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/build/zone?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -727,7 +734,7 @@ server.registerTool(
     if (side) params.set("side", side);
     if (dryRun) params.set("dryRun", "true");
     try {
-      return jsonResult(await bridgeJson(`/build/upgrade?${params.toString()}`, 15_000));
+      return jsonResult(await bridgeJson(`/build/upgrade?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -757,7 +764,7 @@ server.registerTool(
     if (radius !== undefined) params.set("radius", String(radius));
     if (limit) params.set("limit", String(limit));
     try {
-      return jsonResult(await bridgeJson(`/city/roads?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/roads?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -770,7 +777,7 @@ server.registerTool(
     title: "Demolish a building or road segment",
     description:
       "Demolish (bulldoze) one building (from cs2_list_buildings) or road segment (from cs2_list_roads) " +
-      "identified by its entity index and version. Irreversible 鈥?double-check the target first.",
+      "identified by its entity index and version. Irreversible - double-check the target first.",
     inputSchema: {
       dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       index: z.number().int().describe("Entity index from cs2_list_buildings"),
@@ -918,7 +925,7 @@ server.registerTool(
     description:
       "Point the gameplay camera: set the pivot (look-at world coordinates; height auto-sampled from " +
       "terrain unless y given), compass rotation angleX (degrees), tilt angleY (0-89) and zoom distance. " +
-      "Combine with cs2_screenshot to LOOK at any place in the city 鈥?the AI's own eyes.",
+      "Combine with cs2_screenshot to LOOK at any place in the city - the AI's own eyes.",
     inputSchema: {
       x: z.number().optional().describe("Pivot X (requires z)"),
       z: z.number().optional().describe("Pivot Z (requires x)"),
@@ -937,7 +944,7 @@ server.registerTool(
     if (angleY !== undefined) params.set("angleY", String(angleY));
     if (zoom !== undefined) params.set("zoom", String(zoom));
     try {
-      return jsonResult(await bridgeJson(`/camera/set?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/camera/set?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -959,7 +966,7 @@ server.registerTool(
     const params = new URLSearchParams();
     if (resolution) params.set("resolution", String(resolution));
     try {
-      return jsonResult(await bridgeJson(`/city/terrain?${params.toString()}`, 30_000));
+      return jsonResult(await bridgeJson(`/city/terrain?${bridgeQueryString(params)}`, 30_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -1008,7 +1015,7 @@ server.registerTool(
     if (zCoord !== undefined) params.set("z", String(zCoord));
     if (radius !== undefined) params.set("radius", String(radius));
     try {
-      return jsonResult(await bridgeJson(`/city/zoning?${params.toString()}`, 20_000));
+      return jsonResult(await bridgeJson(`/city/zoning?${bridgeQueryString(params)}`, 20_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -1030,7 +1037,7 @@ server.registerTool(
     const params = new URLSearchParams();
     if (limit) params.set("limit", String(limit));
     try {
-      return jsonResult(await bridgeJson(`/city/notifications?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/notifications?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -1108,7 +1115,7 @@ server.registerTool(
   async ({ resource, fee }) => {
     const params = new URLSearchParams({ resource, fee: String(fee) });
     try {
-      return jsonResult(await bridgeJson(`/city/fees/set?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/fees/set?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -1138,7 +1145,7 @@ server.registerTool(
     if (radius !== undefined) params.set("radius", String(radius));
     if (limit) params.set("limit", String(limit));
     try {
-      return jsonResult(await bridgeJson(`/city/objects?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/city/objects?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -1153,20 +1160,27 @@ server.registerTool(
       "Unpause and run the simulation at the given speed, auto-pausing after the requested number of " +
       "in-game hours. Returns immediately with the target frame; poll cs2_game_state (frameIndex) to " +
       "track progress. Use cancel=true to stop early. The core loop for autonomous mayoring: " +
-      "act, run time forward, observe results.",
+      "act, run time forward, observe results. Milestone / signature-building popups force the game to " +
+      "speed 0 while open; by default this run closes them automatically (dismissPopups) so it is not " +
+      "silently held paused. The response's forcedPause tells you if something still holds it.",
     inputSchema: {
       hours: z.number().min(0.1).max(96).optional().describe("In-game hours to run (required unless cancel)"),
       speed: z.number().min(0.5).max(8).optional().describe("Simulation speed while running (default 4)"),
       cancel: z.boolean().optional().describe("true to cancel a timed run and pause now"),
+      dismissPopups: z
+        .boolean()
+        .optional()
+        .describe("Auto-close blocking milestone/signature popups during this run (default true)"),
     },
   },
-  async ({ hours, speed, cancel }) => {
+  async ({ hours, speed, cancel, dismissPopups }) => {
     const params = new URLSearchParams();
     if (cancel) params.set("cancel", "true");
+    if (!cancel) params.set("dismissPopups", String(dismissPopups ?? true));
     if (hours !== undefined) params.set("hours", String(hours));
     if (speed !== undefined) params.set("speed", String(speed));
     try {
-      return jsonResult(await bridgeJson(`/sim/run?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/sim/run?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -1188,7 +1202,7 @@ server.registerTool(
     const params = new URLSearchParams();
     if (name) params.set("name", name);
     try {
-      return jsonResult(await bridgeJson(`/game/save?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/game/save?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -1227,7 +1241,7 @@ server.registerTool(
     if (prefab) params.set("prefab", prefab);
     if (dryRun) params.set("dryRun", "true");
     try {
-      return jsonResult(await bridgeJson(`/build/district?${params.toString()}`, 15_000));
+      return jsonResult(await bridgeJson(`/build/district?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -1277,7 +1291,7 @@ server.registerTool(
     });
     if (adjustment !== undefined) params.set("adjustment", String(adjustment));
     try {
-      return jsonResult(await bridgeJson(`/district/policies/set?${params.toString()}`));
+      return jsonResult(await bridgeJson(`/district/policies/set?${bridgeQueryString(params)}`));
     } catch (err) {
       return errorResult(err);
     }
@@ -1688,9 +1702,10 @@ server.registerTool(
       e2: z.number().optional().describe("Elevation of a free (unsnapped) end in meters"),
       smooth: z.boolean().optional().describe("Tangent-continuous ends: follow the split road or continue a dead end (not with cx/cz)"),
       force: z.boolean().optional().describe("Build even if the prefab is milestone-locked"),
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
     },
   },
-  async ({ prefab, x1, z1, x2, z2, cx, cz, snap, e1, e2, smooth, force }) => {
+  async ({ prefab, x1, z1, x2, z2, cx, cz, snap, e1, e2, smooth, force, dryRun }) => {
     const params = new URLSearchParams({
       prefab,
       x1: String(x1),
@@ -1705,6 +1720,7 @@ server.registerTool(
     if (e2 !== undefined) params.set("e2", String(e2));
     if (smooth) params.set("smooth", "true");
     if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road/connect?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
@@ -1879,7 +1895,20 @@ server.registerTool(
     if (dryRun) params.set("dryRun", "true");
     if (force) params.set("force", "true");
     try {
-      return jsonResult(await bridgeJson(`/build/place/shoreline?${bridgeQueryString(params)}`, 15_000));
+      if (dryRun) {
+        return jsonResult(await bridgeJson(`/build/place/shoreline?${bridgeQueryString(params)}`, 15_000));
+      }
+      // Compute the road-access hint first (the real placement completes asynchronously and cannot carry it).
+      const probe = new URLSearchParams(params);
+      probe.set("dryRun", "true");
+      let roadAccess: unknown = undefined;
+      try {
+        roadAccess = ((await bridgeJson(`/build/place/shoreline?${bridgeQueryString(probe)}`, 15_000)) as any)?.computed?.roadAccess;
+      } catch {
+        /* the real call below reports the error */
+      }
+      const placed = (await bridgeJson(`/build/place/shoreline?${bridgeQueryString(params)}`, 15_000)) as any;
+      return jsonResult(roadAccess ? { ...placed, roadAccess } : placed);
     } catch (err) {
       return errorResult(err);
     }
@@ -1905,15 +1934,17 @@ server.registerTool(
       prefab: z.string().describe("New road prefab name (cs2_find_prefabs category road)"),
       invert: z.boolean().optional().describe("Flip the drawing direction (one-way roads then run the other way)"),
       force: z.boolean().optional().describe("Use the prefab even if it is milestone-locked"),
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
     },
   },
-  async ({ roads, prefab, invert, force }) => {
+  async ({ roads, prefab, invert, force, dryRun }) => {
     const params = new URLSearchParams({
       roads: roads.map((r) => `${r.index}:${r.version}`).join(";"),
       prefab,
     });
     if (invert !== undefined) params.set("invert", String(invert));
     if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road/replace?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
@@ -2049,6 +2080,346 @@ server.registerTool(
     if (force !== undefined) params.set("force", String(force));
     try {
       return jsonResult(await bridgeJson(`/transit/lines/vehicles/set?${bridgeQueryString(params)}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_resource_tax",
+  {
+    title: "Industrial tax rate per resource",
+    description:
+      "Read or set the industrial tax rate of one produced resource (the per-resource sliders in the Taxes " +
+      "panel), e.g. Minerals. Give only a resource to read it, add rate to set it (clamped to the game range). " +
+      "Without a resource, lists every resource's rate. A lower rate attracts more companies making that resource.",
+    inputSchema: {
+      resource: z.string().optional().describe("Resource name from cs2_economy, e.g. Minerals"),
+      rate: z.number().int().optional().describe("New tax rate in percent; omit to only read"),
+    },
+  },
+  async ({ resource, rate }) => {
+    try {
+      const q = new URLSearchParams();
+      if (resource !== undefined) q.set("resource", resource);
+      if (rate !== undefined) q.set("rate", String(rate));
+      const path = rate !== undefined ? "/city/taxes/resource/set" : "/city/taxes/resource";
+      return jsonResult(await bridgeJson(`${path}?${bridgeQueryString(q)}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_create_route",
+  {
+    title: "Create an airplane line or cargo route",
+    description:
+      "Create a passenger airplane line, or a cargo route for airplanes, trains or ships, like the game's Passenger " +
+      "Airplane Line / Cargo Airplane Route / Cargo Train Route / Cargo Ship Route tools. Stops are entity ids in order: " +
+      "airport passenger gates or cargo stands, cargo train terminals or harbours (or the building containing them), and " +
+      "outside connections (find all of them with cs2_list_transit_stops; outside connections serve passengers and " +
+      "cargo). The route loops back to the first stop. Airplanes need no depot; cargo trains come from a rail yard.",
+    inputSchema: {
+      type: z.enum(["airplane", "train", "ship"]).describe("Transport type"),
+      cargo: z.boolean().describe("true = cargo route, false = passenger line (passenger only for airplane here)"),
+      stops: z.array(z.object({ index: z.number().int(), version: z.number().int() })).min(2).max(100).describe("Ordered stops"),
+      name: z.string().max(64).optional().describe("Custom route name"),
+      color: z.string().regex(/^#?[0-9a-fA-F]{6}$/).optional().describe("Route color as #RRGGBB"),
+      force: z.boolean().optional().describe("Create even if this route type is milestone-locked"),
+    },
+  },
+  async ({ type, cargo, stops, name, color, force }) => {
+    const params = new URLSearchParams({
+      type,
+      cargo: String(cargo),
+      stops: stops.map((s) => `${s.index}:${s.version}`).join(";"),
+    });
+    if (name) params.set("name", name);
+    if (color) params.set("color", color.startsWith("#") ? color : `#${color}`);
+    if (force) params.set("force", "true");
+    try {
+      return jsonResult(await bridgeJson(`/transit/routes/create?${bridgeQueryString(params)}`, 30_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_resources",
+  {
+    title: "Natural resource map",
+    description:
+      "Grid of natural resources over the whole map (row-major by z, like cs2_gridmap): fertility, ore, oil and fish " +
+      "from the game's natural-resource cell map (available = base - used), or forest as harvestable wood summed from " +
+      "trees. Also returns totals and the richest clusters with their center and bounding box, to pick where to place " +
+      "specialized industry (check tile ownership with cs2_list_map_tiles).",
+    inputSchema: {
+      resource: z.enum(["fertility", "ore", "oil", "fish", "forest"]).describe("Which natural resource"),
+      resolution: z.number().int().min(8).max(256).optional().describe("Output grid size per side (default 64)"),
+      threshold: z.number().min(0.01).max(1).optional().describe("Cluster cut-off as a fraction of the richest cell (default 0.25)"),
+      clusters: z.number().int().min(0).max(50).optional().describe("How many clusters to return (default 10)"),
+    },
+  },
+  async ({ resource, resolution, threshold, clusters }) => {
+    const params = new URLSearchParams({ resource });
+    if (resolution) params.set("resolution", String(resolution));
+    if (threshold !== undefined) params.set("threshold", String(threshold));
+    if (clusters !== undefined) params.set("clusters", String(clusters));
+    try {
+      return jsonResult(await bridgeJson(`/city/resources?${bridgeQueryString(params)}`, 30_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_specialized_area",
+  {
+    title: "Specialized industry",
+    description:
+      "Specialized industry (agriculture, forestry, ore, oil, fish) like the game: list=true lists the extractor " +
+      "placeholder buildings (with their area prefabs and resource) and the city's existing extractor areas with their " +
+      "owner building. With type (+variant, e.g. Grain, Livestock, Coal, Stone, Water, Land), road and side it places the " +
+      "placeholder building flush against the road; the game creates its extractor area and a company moves in. With " +
+      "points it then redraws that area as the polygon, like the game's area tool. area or building + points redraws an " +
+      "existing extractor area. Placement attaches the extractor building the game itself would pick; owner.broken in the listing marks placeholders from the old tool that have none (demolish and place again). The game checks the shape (no self-intersection), overlap and the maximum distance of " +
+      "each corner from the building, and refuses invalid polygons. Industrial zoning does not create these.",
+    inputSchema: {
+      list: z.boolean().optional().describe("Only list placeholders and existing extractor areas"),
+      type: z.enum(["agriculture", "forestry", "ore", "oil", "fish"]).optional().describe("Industry type for a new placement"),
+      variant: z.string().optional().describe("Part of the placeholder name when a type has several"),
+      road: z.object({ index: z.number().int(), version: z.number().int() }).optional().describe("Road segment (cs2_road_graph)"),
+      side: z.enum(["left", "right"]).optional().describe("Side of the road, as seen from the segment's start"),
+      t: z.number().min(0).max(1).optional().describe("Position along the segment (default 0.5)"),
+      points: z
+        .array(z.object({ x: z.number(), z: z.number() }))
+        .min(3)
+        .max(64)
+        .optional()
+        .describe("Area polygon corners in world meters, in order"),
+      area: z.object({ index: z.number().int(), version: z.number().int() }).optional().describe("Existing extractor area to redraw"),
+      building: z
+        .object({ index: z.number().int(), version: z.number().int() })
+        .optional()
+        .describe("Specialized-industry building whose extractor area to redraw"),
+      dryRun: z.boolean().optional().describe("Only compute the placement position, rotation and attached building; the game does not validate it"),
+      force: z.boolean().optional().describe("Place even if milestone-locked"),
+    },
+  },
+  async ({ list, type, variant, road, side, t, points, area, building, dryRun, force }) => {
+    const pointsParam = points ? points.map((p) => `${p.x},${p.z}`).join(";") : undefined;
+    const reshape = async (target: URLSearchParams) => {
+      target.set("points", pointsParam!);
+      return bridgeJson(`/build/specialized-area?${bridgeQueryString(target)}`, 15_000);
+    };
+    try {
+      if (pointsParam && (area || building)) {
+        const params = new URLSearchParams();
+        if (area) params.set("area", `${area.index}:${area.version}`);
+        else if (building) params.set("building", `${building.index}:${building.version}`);
+        return jsonResult(await reshape(params));
+      }
+      if (list || !type) {
+        return jsonResult(await bridgeJson("/city/specialized-areas"));
+      }
+      if (!road || !side) {
+        throw new Error("road and side are required to place specialized industry");
+      }
+      const params = new URLSearchParams({ type, road: `${road.index}:${road.version}`, side });
+      if (variant) params.set("variant", variant);
+      if (t !== undefined) params.set("t", String(t));
+      if (dryRun) params.set("dryRun", "true");
+      if (force) params.set("force", "true");
+      const placed = (await bridgeJson(`/build/specialized-area?${bridgeQueryString(params)}`, 15_000)) as {
+        position?: { x: number; z: number };
+      };
+      if (!pointsParam || dryRun || !placed.position) {
+        return jsonResult(placed);
+      }
+      // Step 2: find the new building's extractor area (the game creates it on apply), then redraw it.
+      const at = placed.position;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const listing = (await bridgeJson("/city/specialized-areas")) as {
+          existingAreas?: Array<{
+            entity: { index: number; version: number };
+            owner?: { position?: { x: number; z: number } };
+          }>;
+        };
+        const match = (listing.existingAreas ?? []).find(
+          (a) => a.owner?.position && Math.hypot(a.owner.position.x - at.x, a.owner.position.z - at.z) < 8,
+        );
+        if (match) {
+          const reshaped = await reshape(new URLSearchParams({ area: `${match.entity.index}:${match.entity.version}` }));
+          return jsonResult({ placed, reshaped });
+        }
+      }
+      return jsonResult({
+        placed,
+        reshaped: null,
+        note: "placed, but its extractor area was not found within 5 s; redraw later with area/building + points",
+      });
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_replace_net",
+  {
+    title: "Replace network type",
+    description:
+      "Upgrade existing net segments in place to another prefab of the same family, like the game's upgrade/" +
+      "replace tool, keeping geometry and junctions. Works for roads AND tracks: e.g. 'Twoway Train Track' -> " +
+      "'Double Train Track', or subway tracks. The target must be the same family as every segment (road to road, " +
+      "train to train, subway to subway); if any segment is invalid nothing is changed and per-segment errors are " +
+      "returned. Max 30 segments per call. dryRun=true runs the game's validation and reports validity and cost without changing anything.",
+    inputSchema: {
+      nets: z
+        .array(z.object({ index: z.number().int(), version: z.number().int() }))
+        .min(1)
+        .max(30)
+        .describe("Net segments to replace (from cs2_list_roads, cs2_road_graph or cs2_traffic)"),
+      prefab: z.string().describe("New net prefab name (cs2_find_prefabs category net)"),
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
+      invert: z.boolean().optional().describe("Flip the drawing direction"),
+      force: z.boolean().optional().describe("Use the prefab even if it is milestone-locked"),
+    },
+  },
+  async ({ nets, prefab, dryRun, invert, force }) => {
+    const params = new URLSearchParams({
+      nets: nets.map((r) => `${r.index}:${r.version}`).join(";"),
+      prefab,
+    });
+    if (dryRun) params.set("dryRun", "true");
+    if (invert !== undefined) params.set("invert", String(invert));
+    if (force) params.set("force", "true");
+    try {
+      return jsonResult(await bridgeJson(`/build/net/replace?${bridgeQueryString(params)}`, 15_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_tool_status",
+  {
+    title: "Bridge tool status",
+    description:
+      "Diagnostics for build requests that keep answering 'another build operation is in progress': the stage of " +
+      "each of the bridge's headless tools, which tool the game has active, and how often the watchdog had to " +
+      "reactivate a tool another tool had displaced.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return jsonResult(await bridgeJson("/tools/status"));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_popups",
+  {
+    title: "Blocking popup status",
+    description:
+      "Status of blocking UI popups (milestone reached, signature building unlocked). While one is open the game " +
+      "forces the simulation to speed 0 every frame, so run/unpause commands appear to do nothing. Shows the " +
+      "pending popups, whether blocking popups are enabled, auto-dismiss state and the current forced-pause reason.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return jsonResult(await bridgeJson("/ui/popups"));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_dismiss_popups",
+  {
+    title: "Close blocking popups",
+    description:
+      "Close every open milestone / signature-building popup exactly like its own close button, releasing the " +
+      "forced pause. Milestone rewards are granted before the popup appears, so nothing is lost.",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return jsonResult(await bridgeJson("/ui/popups/dismiss"));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_set_popups",
+  {
+    title: "Configure blocking popups",
+    description:
+      "blocking=false turns off the game's own 'blocking popups' interface option (saved to the game settings, " +
+      "same as Options > Interface) so milestone/signature dialogs never pause the game. autoDismiss=true makes " +
+      "the mod close such popups whenever they appear (not persisted; resets when the game restarts).",
+    inputSchema: {
+      blocking: z.boolean().optional().describe("Game option: show blocking popups (false = never show them)"),
+      autoDismiss: z.boolean().optional().describe("Mod option: close blocking popups automatically"),
+    },
+  },
+  async ({ blocking, autoDismiss }) => {
+    const params = new URLSearchParams();
+    if (blocking !== undefined) params.set("blocking", String(blocking));
+    if (autoDismiss !== undefined) params.set("autoDismiss", String(autoDismiss));
+    try {
+      return jsonResult(await bridgeJson(`/ui/popups/set?${bridgeQueryString(params)}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_wait_simulation",
+  {
+    title: "Wait for the simulation",
+    description:
+      "Block (up to maxSeconds, max 55) until the simulation is paused again - e.g. a cs2_run_simulation timed run " +
+      "finished - then return the game state and city overview. Use it instead of polling cs2_game_state in a loop. " +
+      "Returns early if a blocking popup holds the game (forcedPause='popup').",
+    inputSchema: {
+      maxSeconds: z.number().min(1).max(55).optional().describe("Longest time to wait in real seconds (default 50)"),
+    },
+  },
+  async ({ maxSeconds }) => {
+    const deadline = Date.now() + (maxSeconds ?? 50) * 1000;
+    try {
+      let state: any = await bridgeJson("/state");
+      while (Date.now() < deadline) {
+        const sim = state?.simulation;
+        if (!sim || sim.paused || sim.forcedPause === "popup") break;
+        await new Promise((r) => setTimeout(r, 2000));
+        state = await bridgeJson("/state");
+      }
+      const overview = await bridgeJson("/city/overview").catch(() => null);
+      const sim = state?.simulation;
+      return jsonResult({
+        finishedWaiting: Boolean(sim?.paused),
+        stillRunning: Boolean(sim && !sim.paused),
+        state,
+        overview,
+        note: sim && !sim.paused ? "still running: call cs2_wait_simulation again or do other read-only checks" : undefined,
+      });
     } catch (err) {
       return errorResult(err);
     }

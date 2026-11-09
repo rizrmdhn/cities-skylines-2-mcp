@@ -755,6 +755,24 @@ namespace CS2MCP
             }
         }
 
+        [Preserve]
+        protected override void OnStopRunning()
+        {
+            if (m_Stage != Stage.Idle && m_ToolSystem.activeTool != this)
+            {
+                // Another tool (the player's, or another bridge tool) took over mid-operation. Without this the
+                // tool stayed busy forever and every build request answered "another build operation is in
+                // progress" until the game restarted.
+                bool mayHaveApplied = m_Stage == Stage.Finish || m_Stage == Stage.Terraform;
+                CompletePending(BridgeResponse.Error(409,
+                    $"{m_PendingKind} ({m_PendingLabel}) interrupted because another tool became active" +
+                    (mayHaveApplied ? "; it may be partly applied, check the result before retrying" : "; nothing was applied, retry")));
+                m_PreviousTool = null;
+                Deactivate();
+            }
+            base.OnStopRunning();
+        }
+
         private void CompletePending(BridgeResponse response)
         {
             m_PendingRequest?.Complete(response);

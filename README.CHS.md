@@ -91,7 +91,7 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 
 启动游戏、读取存档，然后问 Claude："看看我的城市财政状况"、"在河边划一片住宅区"、"修一条路把工业区接上高速"。
 
-## 工具总览（78 个）
+## 工具总览（88 个）
 
 **状态与画面**
 
@@ -111,7 +111,8 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | `cs2_budget` | 收支明细：14 项收入 / 15 项支出来源 |
 | `cs2_city_services` | 电力、水务、垃圾状态 |
 | `cs2_happiness` | 城市信息面板的幸福度因素（税、污染、服务、无家可归……）及其对健康/幸福的影响，最差优先 |
-| `cs2_economy` | 各资源的产量、消耗、产能、库存、进出口和消费方（生产面板数据），以及企业统计（岗位填充、盈利） |
+| `cs2_economy` | 经济 > 生产面板的各资源数据（产量、含服务维护与最终消费的消耗、平衡、进出口、库存、产能、最大缺口），以及企业统计（岗位填充、盈利） |
+| `cs2_resources` | 自然资源地图（肥力、矿石、石油、鱼类、森林）及总量和最富集区域，用于选址专业化工业 |
 | `cs2_progression` | 经验、已达里程碑、下一里程碑进度和奖励、发展点数 |
 | `cs2_dev_tree` / `cs2_dev_tree_purchase` | 发展树节点（价格、为何暂不能购买）/ 像发展树面板一样购买节点 |
 | `cs2_coverage` | 分区建筑的公共服务覆盖（医疗、消防、警察、公园、邮政、教育、避难所、福利、通信）：覆盖不足的建筑/居民、按信息视图色阶分级、服务建筑数量，以及适合新建服务建筑的最大覆盖缺口 |
@@ -137,6 +138,8 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | `cs2_upgrade_road` | 道路升级：草地/树/宽人行道/隔音屏/停车位/路灯/中央绿化 |
 | `cs2_set_junction_control` | 把路口设为红绿灯、无灯、全向停车或游戏默认（即路口工具的节点升级） |
 | `cs2_replace_road` | 原地更换已有路段的道路类型（道路工具的替换模式）：拓宽高速、改为单行道 |
+| `cs2_replace_net` | 同上，适用于任意网络类型，包括火车、有轨电车和地铁轨道（最多 30 段，全部成功或全部不变） |
+| `cs2_specialized_area` | 专业化工业（农业、林业、矿石、石油、渔业）：列出、放置带采集建筑的中心、重绘采集区域 |
 | `cs2_connect_road` | 修建两端吸附到已有路口或切分已有路段的道路/轨道（同道路工具的吸附），可抬高或下沉 |
 | `cs2_prefab_info` | 建筑的占地、尺寸、放置规则与造价，或网络的宽度与层级 |
 | `cs2_place_shoreline` | 在水岸放置港口、水泵等临水建筑，按游戏放置工具的方式吸附 |
@@ -156,6 +159,7 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | 工具 | 说明 |
 |---|---|
 | `cs2_get_taxes` / `cs2_set_tax` | 四大区类税率（钳制在游戏允许范围） |
+| `cs2_resource_tax` | 各产出资源的工业税率：读取全部或设置单项 |
 | `cs2_policies` / `cs2_set_policy` | 城市政策（含本地化名称） |
 | `cs2_service_budgets` / `cs2_set_service_budget` | 服务预算滑条 50-150% |
 | `cs2_get_fees` / `cs2_set_fee` | 水电/医疗/教育等服务收费 |
@@ -172,6 +176,7 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | `cs2_list_transit_stops` | 站点的类型、名称、位置、所属车站、所依附道路及经停线路；`airplane` 列出机场登机口（客运或货运）与地图的航空外部连接 |
 | `cs2_place_transit_stop` | 通过物件工具管线放置路边公交/有轨电车站（由游戏依附、吸附并校验） |
 | `cs2_create_transit_line` | 经由有序站点（站点 ID、车站建筑或吸附到站点的坐标）通过路线工具管线建线；等待游戏寻路完成，不可达的路段会被拒绝 |
+| `cs2_create_route` | 客运航线，或飞机、火车、轮船的货运路线（登机口、货运站、港口、外部连接） |
 | `cs2_list_transit_lines` | 线路及交通面板上的数字（站数、车辆数、车上乘客、使用率、长度、时刻），可选每站候车人数 |
 | `cs2_delete_transit_line` | 与游戏自带删除按钮完全一致地删除线路 |
 | `cs2_line_policies` / `cs2_set_line_policy` | 线路政策（票价、车辆数等），按线路面板的方式设置 |
@@ -182,13 +187,19 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | 工具 | 说明 |
 |---|---|
 | `cs2_set_simulation` | 暂停/调速（0-8） |
-| `cs2_run_simulation` | 定时快进：跑 N 游戏小时后自动暂停 |
+| `cs2_run_simulation` | 定时快进：跑 N 游戏小时后自动暂停（默认自动关闭里程碑等阻断式弹窗） |
+| `cs2_popups` | 阻断式弹窗状态：待显示的里程碑/地标弹窗、强制暂停原因 |
+| `cs2_dismiss_popups` | 关闭里程碑/地标解锁弹窗（解除强制暂停） |
+| `cs2_set_popups` | 关闭游戏的阻断式弹窗选项，或让 Mod 自动关闭弹窗 |
+| `cs2_wait_simulation` | 等待（最多 55 秒）定时快进暂停，然后返回状态和城市概览 |
+| `cs2_tool_status` | 桥接工具的阶段和看门狗重新激活次数，用于排查“另一个建造操作正在进行” |
 | `cs2_save_game` | 触发存档（建议 AI 大规模操作前调用） |
 
 ## 排障
 
 - **`cs2_ping` 连不上**：Mod 未加载。查 `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Logs\CS2MCP.log`（正常应有 `bridge listening on ...`）；无此文件则查同目录 `Player.log`。
 - **409 no city loaded**：还在主菜单，先读档。
+- **模拟一直暂停 / `cs2_run_simulation` 没反应**：有里程碑或地标解锁弹窗打开，弹窗存在时游戏每帧强制速度为 0。`cs2_game_state` 会返回 `forcedPause: "popup"`；用 `cs2_dismiss_popups` 关闭，或用 `cs2_set_popups blocking=false` 关掉此类弹窗。
 - **锁定状态显示异常**：读档后先短暂解除暂停一次（相关接口在未跑过模拟时会返回 `stalenessWarning`）。
 - **端口冲突**：给游戏进程设 `CS2MCP_PORT`，并同步修改 `.env` 中的 `CS2_BRIDGE_URL`。
 
