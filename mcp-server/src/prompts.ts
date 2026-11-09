@@ -35,7 +35,11 @@ export const GUIDE = `# Using cs2-mcp
 - Upgrades: cs2_building_upgrades -> cs2_place_upgrade.
 - Stations: cs2_place_building or cs2_place_roadside -> cs2_building_connections -> cs2_connect_road smooth=true.
 - Moving a service building: cs2_move_building (keeps upgrades, workers and vehicles).
-- Simulation: cs2_run_simulation for N in-game hours, then re-read cs2_city_overview / cs2_demand.
+- Simulation: cs2_run_simulation for N in-game hours (closes milestone popups that would freeze it), cs2_wait_simulation
+  until it pauses, then re-read cs2_city_overview / cs2_demand. A run that does not advance: cs2_popups.
+- Specialized industry: cs2_economy (deficits) -> cs2_resources (richest clusters) -> cs2_specialized_area.
+- Air and cargo: cs2_list_transit_stops (gates, cargo terminals, outside connections) -> cs2_create_route.
+- Builds stuck on "another build operation is in progress": cs2_tool_status.
 - Why people are unhappy: cs2_happiness; what the economy lacks: cs2_economy; progress: cs2_progression -> cs2_dev_tree.
 - Landscaping: cs2_terraform (raise/lower/level/soften), dryRun first.
 - Traffic jams: cs2_traffic -> cs2_traffic_diagnose on the worst bottleneck -> one fix -> cs2_run_simulation ->

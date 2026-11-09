@@ -196,6 +196,7 @@ namespace CS2MCP
                 || path == "/city/dev-tree/purchase"
                 || path == "/transit/stops/place"
                 || path == "/transit/lines/create"
+                || path == "/transit/routes/create"
                 || path == "/transit/lines/delete";
         }
 
