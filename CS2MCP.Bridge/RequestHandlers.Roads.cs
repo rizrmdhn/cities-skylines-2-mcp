@@ -124,7 +124,7 @@ namespace CS2MCP
                 return error;
             }
             BridgeRoadToolSystem tool = World.GetOrCreateSystemManaged<BridgeRoadToolSystem>();
-            if (!tool.TryQueueBuild(prefabEntity, prefab, start, end, bezier, request))
+            if (!tool.TryQueueBuild(prefabEntity, prefab, start, end, bezier, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another road operation is in progress, retry shortly");
             }
@@ -306,7 +306,7 @@ namespace CS2MCP
             }
 
             BridgeRoadToolSystem tool = World.GetOrCreateSystemManaged<BridgeRoadToolSystem>();
-            if (!tool.TryQueueReplace(edges.ToArray(), prefabEntity, prefab, invert, request))
+            if (!tool.TryQueueReplace(edges.ToArray(), prefabEntity, prefab, invert, request, IsDryRun(request)))
             {
                 return BridgeResponse.Error(409, "another road operation is in progress, retry shortly");
             }

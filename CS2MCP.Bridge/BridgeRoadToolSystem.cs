@@ -66,6 +66,8 @@ namespace CS2MCP
         private BridgeRequest m_PendingRequest;
         private ToolBaseSystem m_PreviousTool;
         private bool m_Applied;
+        private bool m_PendingDryRun;
+        private EntityQuery m_TempQuery;
 
         private EntityQuery m_IconQuery;
         private EntityQuery m_EdgeQuery;
@@ -82,6 +84,7 @@ namespace CS2MCP
                 ComponentType.ReadOnly<Game.Notifications.Icon>(),
                 ComponentType.ReadOnly<Owner>(),
                 ComponentType.ReadOnly<PrefabRef>());
+            m_TempQuery = GetEntityQuery(ComponentType.ReadOnly<Temp>(), ComponentType.Exclude<Deleted>());
             m_EdgeQuery = EntityManager.CreateEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -110,7 +113,7 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueueReplace(Entity[] edges, Entity prefabEntity, PrefabBase prefab, bool invert, BridgeRequest request)
+        public bool TryQueueReplace(Entity[] edges, Entity prefabEntity, PrefabBase prefab, bool invert, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
@@ -126,6 +129,7 @@ namespace CS2MCP
             m_PendingPrefab = prefab;
             m_PendingInvert = invert;
             m_PendingRequest = request;
+            m_PendingDryRun = dryRun;
             m_Applied = false;
             m_Mode = Mode.Replace;
             m_Stage = Stage.CreateDefinitions;
@@ -135,7 +139,7 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread. The curve must start at start.Position and end at end.Position.</summary>
-        public bool TryQueueBuild(Entity prefabEntity, PrefabBase prefab, BuildEnd start, BuildEnd end, Bezier4x3 curve, BridgeRequest request)
+        public bool TryQueueBuild(Entity prefabEntity, PrefabBase prefab, BuildEnd start, BuildEnd end, Bezier4x3 curve, BridgeRequest request, bool dryRun = false)
         {
             if (m_Stage != Stage.Idle)
             {
@@ -150,12 +154,31 @@ namespace CS2MCP
             m_PendingPrefab = prefab;
             m_PendingInvert = false;
             m_PendingRequest = request;
+            m_PendingDryRun = dryRun;
             m_Applied = false;
             m_Mode = Mode.Build;
             m_Stage = Stage.CreateDefinitions;
             m_PreviousTool = m_ToolSystem.activeTool;
             m_ToolSystem.activeTool = this;
             return true;
+        }
+
+        /// <summary>Construction cost of the pending preview, counted like TempCostTooltipSystem (negative = refund).</summary>
+        private int PreviewCost()
+        {
+            const TempFlags counted = TempFlags.Create | TempFlags.Delete | TempFlags.Modify | TempFlags.Replace | TempFlags.Upgrade | TempFlags.RemoveCost;
+            int total = 0;
+            using (NativeArray<Temp> temps = m_TempQuery.ToComponentDataArray<Temp>(Allocator.Temp))
+            {
+                foreach (Temp temp in temps)
+                {
+                    if ((temp.m_Flags & counted) != 0 && (temp.m_Flags & TempFlags.Cancel) == 0)
+                    {
+                        total += temp.m_Cost;
+                    }
+                }
+            }
+            return total;
         }
 
         private string OperationName => m_Mode == Mode.Build ? "building the connection" : "road replacement";
@@ -179,6 +202,28 @@ namespace CS2MCP
                         }
                         m_Stage = Stage.Apply;
                         break;
+
+                    case Stage.Apply when m_PendingDryRun:
+                    {
+                        bool valid = GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter;
+                        List<string> errors = valid ? new List<string>() : CollectTempErrors();
+                        int cost = PreviewCost();
+                        applyMode = ApplyMode.Clear;
+                        CompletePending(BridgeResponse.Json(new
+                        {
+                            dryRun = true,
+                            valid,
+                            operation = m_Mode == Mode.Build ? "connect" : "replace",
+                            prefab = m_PendingPrefab != null ? m_PendingPrefab.name : null,
+                            segments = m_PendingEdges != null ? m_PendingEdges.Length : 1,
+                            cost = math.max(cost, 0),
+                            refund = math.max(-cost, 0),
+                            errors = valid ? null : errors,
+                            note = "nothing was changed; repeat without dryRun to apply",
+                        }));
+                        m_Stage = Stage.Finish;
+                        break;
+                    }
 
                     case Stage.Apply:
                         if (GetAllowApply())
@@ -523,6 +568,7 @@ namespace CS2MCP
         private void Deactivate()
         {
             m_Stage = Stage.Idle;
+            m_PendingDryRun = false;
             m_PendingRequest = null;
             m_PendingEdges = null;
             m_PendingPrefab = null;

@@ -1697,9 +1697,10 @@ server.registerTool(
       e2: z.number().optional().describe("Elevation of a free (unsnapped) end in meters"),
       smooth: z.boolean().optional().describe("Tangent-continuous ends: follow the split road or continue a dead end (not with cx/cz)"),
       force: z.boolean().optional().describe("Build even if the prefab is milestone-locked"),
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
     },
   },
-  async ({ prefab, x1, z1, x2, z2, cx, cz, snap, e1, e2, smooth, force }) => {
+  async ({ prefab, x1, z1, x2, z2, cx, cz, snap, e1, e2, smooth, force, dryRun }) => {
     const params = new URLSearchParams({
       prefab,
       x1: String(x1),
@@ -1714,6 +1715,7 @@ server.registerTool(
     if (e2 !== undefined) params.set("e2", String(e2));
     if (smooth) params.set("smooth", "true");
     if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road/connect?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
@@ -1927,15 +1929,17 @@ server.registerTool(
       prefab: z.string().describe("New road prefab name (cs2_find_prefabs category road)"),
       invert: z.boolean().optional().describe("Flip the drawing direction (one-way roads then run the other way)"),
       force: z.boolean().optional().describe("Use the prefab even if it is milestone-locked"),
+      dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
     },
   },
-  async ({ roads, prefab, invert, force }) => {
+  async ({ roads, prefab, invert, force, dryRun }) => {
     const params = new URLSearchParams({
       roads: roads.map((r) => `${r.index}:${r.version}`).join(";"),
       prefab,
     });
     if (invert !== undefined) params.set("invert", String(invert));
     if (force) params.set("force", "true");
+    if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road/replace?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
