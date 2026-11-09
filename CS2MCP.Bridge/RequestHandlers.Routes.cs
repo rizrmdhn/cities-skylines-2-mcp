@@ -10,9 +10,9 @@ using Transform = Game.Objects.Transform;
 namespace CS2MCP
 {
     /// <summary>
-    /// Passenger airplane lines and cargo routes (airplane, train, ship): the
-    /// game's "Passenger Airplane Line", "Cargo Airplane Route", "Cargo Train
-    /// Route" and "Cargo Ship Route" tools. Same pipeline as
+    /// Airplane, ship and ferry passenger lines and cargo routes (airplane, train,
+    /// ship): the game's passenger airplane/ship/ferry line tools and its cargo
+    /// airplane/train/ship route tools. Same pipeline as
     /// /transit/lines/create (BridgeTransitToolSystem), but the line prefab and
     /// the stops are chosen by transport type AND passenger/cargo, as
     /// ValidationHelpers.ValidateRoute requires (a cargo route needs cargo
@@ -27,6 +27,7 @@ namespace CS2MCP
                 ["air"] = TransportType.Airplane,
                 ["train"] = TransportType.Train,
                 ["ship"] = TransportType.Ship,
+                ["ferry"] = TransportType.Ferry,
             };
 
         private BridgeResponse CreateRoute(BridgeRequest request)
@@ -38,19 +39,20 @@ namespace CS2MCP
             if (!request.Query.TryGetValue("type", out string rawType) || string.IsNullOrEmpty(rawType)
                 || !kRouteTypes.TryGetValue(rawType.Trim(), out TransportType type))
             {
-                return BridgeResponse.Error(400, "provide ?type=airplane|train|ship");
+                return BridgeResponse.Error(400, "provide ?type=airplane|train|ship|ferry");
             }
             bool cargo = request.TryGetBool("cargo", out bool rawCargo) && rawCargo;
             string typeName = (cargo ? "cargo " : "passenger ") + TransitTypeName(type);
-            if (!cargo && type != TransportType.Airplane)
+            // Passenger trains use stations along tracks, created by /transit/lines/create.
+            if (!cargo && type == TransportType.Train)
             {
                 return BridgeResponse.Error(400, $"use cs2_create_transit_line for passenger {TransitTypeName(type)} lines");
             }
             if (!request.Query.TryGetValue("stops", out string rawStops) || string.IsNullOrEmpty(rawStops))
             {
                 return BridgeResponse.Error(400,
-                    "provide ?stops=<ordered list separated by ';'> of 'index:version' stops (gates, cargo terminals, " +
-                    "outside connections) or buildings containing one; the route loops back to the first stop");
+                    "provide ?stops=<ordered list separated by ';'> of 'index:version' stops (airport gates, harbor or ferry " +
+                    "piers, cargo terminals, outside connections) or buildings containing one; the route loops back to the first stop");
             }
 
             if (!TryResolveRoutePrefab(type, cargo, typeName, IsForced(request), out Entity prefabEntity, out PrefabBase prefab, out error))

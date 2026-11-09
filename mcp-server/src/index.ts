@@ -1329,7 +1329,7 @@ server.registerTool(
       "type and/or spatially (sorted by distance when x/z given). prefabs=true also lists placeable roadside stop " +
       "prefabs for cs2_place_transit_stop.",
     inputSchema: {
-      type: z.enum(["bus", "tram", "metro", "train", "airplane"]).optional().describe("Only stops of this transport type; airplane lists airport gates (passenger or cargo) and the map's air outside connections"),
+      type: z.enum(["bus", "tram", "metro", "train", "airplane", "ship", "ferry"]).optional().describe("Only stops of this transport type; airplane lists airport gates, ship/ferry list harbor and ferry piers (passenger or cargo), each with the map's matching outside connections"),
       x: z.number().optional().describe("Center X for spatial filter"),
       z: z.number().optional().describe("Center Z for spatial filter"),
       radius: z.number().optional().describe("Radius in meters for spatial filter (default 500)"),
@@ -1437,7 +1437,7 @@ server.registerTool(
       "includeStops=true adds each stop in order with its waiting passengers. The game keeps no per-line ridership " +
       "history; city-wide passenger series are in cs2_statistics (PassengerCountBus, ...).",
     inputSchema: {
-      type: transitType.optional().describe("Only lines of this transport type"),
+      type: z.enum(["bus", "tram", "metro", "train", "airplane", "ship", "ferry"]).optional().describe("Only lines of this transport type"),
       query: z.string().optional().describe("Case-insensitive line name substring"),
       includeStops: z.boolean().optional().describe("Include the ordered stop list with waiting passengers"),
       limit: z.number().int().min(1).max(200).optional().describe("Max results (default 50)"),
@@ -2115,16 +2115,17 @@ server.registerTool(
 server.registerTool(
   "cs2_create_route",
   {
-    title: "Create an airplane line or cargo route",
+    title: "Create an air or water line, or a cargo route",
     description:
-      "Create a passenger airplane line, or a cargo route for airplanes, trains or ships, like the game's Passenger " +
-      "Airplane Line / Cargo Airplane Route / Cargo Train Route / Cargo Ship Route tools. Stops are entity ids in order: " +
-      "airport passenger gates or cargo stands, cargo train terminals or harbours (or the building containing them), and " +
-      "outside connections (find all of them with cs2_list_transit_stops; outside connections serve passengers and " +
-      "cargo). The route loops back to the first stop. Airplanes need no depot; cargo trains come from a rail yard.",
+      "Create a passenger airplane, ship or ferry line, or a cargo route for airplanes, trains or ships, like the game's " +
+      "own line and route tools. Stops are entity ids in order: airport gates or cargo stands, harbor or ferry piers, " +
+      "cargo train terminals (or the building containing the stop), and outside connections (find all of them with " +
+      "cs2_list_transit_stops type=airplane|ship|ferry|train; outside connections serve passengers and cargo). The game " +
+      "checks that every stop serves passengers (or cargo) and that the vehicles can travel between them (waterways for " +
+      "ships and ferries). The route loops back to the first stop. Passenger trains use cs2_create_transit_line.",
     inputSchema: {
-      type: z.enum(["airplane", "train", "ship"]).describe("Transport type"),
-      cargo: z.boolean().describe("true = cargo route, false = passenger line (passenger only for airplane here)"),
+      type: z.enum(["airplane", "train", "ship", "ferry"]).describe("Transport type"),
+      cargo: z.boolean().describe("true = cargo route, false = passenger line (airplane, ship or ferry; passenger trains use cs2_create_transit_line)"),
       stops: z.array(z.object({ index: z.number().int(), version: z.number().int() })).min(2).max(100).describe("Ordered stops"),
       name: z.string().max(64).optional().describe("Custom route name"),
       color: z.string().regex(/^#?[0-9a-fA-F]{6}$/).optional().describe("Route color as #RRGGBB"),

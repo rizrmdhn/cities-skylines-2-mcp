@@ -183,7 +183,7 @@ Every construction tool (place, road, road upgrade, junction, district, zone, de
 | `cs2_list_transit_stops` | Stops with type, name, position, owning station, attached road and the lines serving them; `airplane` lists airport gates (passenger or cargo) and the map's air outside connections |
 | `cs2_place_transit_stop` | Place a roadside bus/tram stop via the object tool pipeline (attached, snapped and validated by the game) |
 | `cs2_create_transit_line` | Line through ordered stops (ids, station buildings or points snapped to stops) via the route tool pipeline; waits for the game's pathfinding and refuses unreachable segments |
-| `cs2_create_route` | Passenger airplane line, or cargo route for airplanes, trains or ships (gates, cargo terminals, harbors, outside connections) |
+| `cs2_create_route` | Passenger airplane, ship or ferry line, or cargo route for airplanes, trains or ships (gates, harbor/ferry piers, cargo terminals, outside connections) |
 | `cs2_list_transit_lines` | Lines with the transportation panel's numbers (stops, vehicles, passengers on board, usage, length, schedule) and optional per-stop waiting passengers |
 | `cs2_delete_transit_line` | Delete a line exactly like the game's own delete button |
 | `cs2_line_policies` / `cs2_set_line_policy` | A line's policies (ticket price, vehicle count...) and setting them like the line panel does |
@@ -217,7 +217,7 @@ Besides tools, the server offers MCP **prompts** (ready-made workflows): `city_h
 ## Known Limitations / Roadmap
 
 - Terraforming covers the height brushes (raise, lower, level, soften); slope and resource brushes are not exposed
-- Transit: stops can be placed for bus/tram (roadside); train/metro stops are station buildings (place with `cs2_place_building` or `cs2_place_roadside`, then join their tracks via `cs2_building_connections` + `cs2_connect_road smooth=true`). Airplane lines and cargo routes (air, train, ship) are created with `cs2_create_route`; passenger ship and ferry lines are not supported yet. Lines only get vehicles when a depot of the same type exists and the simulation runs
+- Transit: stops can be placed for bus/tram (roadside); train/metro stops are station buildings (place with `cs2_place_building` or `cs2_place_roadside`, then join their tracks via `cs2_building_connections` + `cs2_connect_road smooth=true`). Airplane, ship and ferry lines and cargo routes (air, train, ship) are created with `cs2_create_route` from existing gates, piers and outside connections; ferry lines need a ferry prefab in the game (from an expansion or update). Lines only get vehicles when a depot of the same type exists and the simulation runs
 - Building modules (e.g. port areas) are listed by `cs2_building_upgrades` but cannot be placed yet
 - Screenshots capture the game's current rendering: with a road-tool panel open the game renders roads in white outline mode
 

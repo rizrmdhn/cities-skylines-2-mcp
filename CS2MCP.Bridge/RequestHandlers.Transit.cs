@@ -28,10 +28,12 @@ namespace CS2MCP
                 ["metro"] = TransportType.Subway,
                 ["subway"] = TransportType.Subway,
                 ["train"] = TransportType.Train,
-                // Listing airport gates and the map's air connections. Airplane lines and cargo
-                // routes are created with /transit/routes/create (RequestHandlers.Routes.cs).
+                // Listing only here: airport gates, harbor/ferry piers and the map's air and sea
+                // connections. Their lines are created with /transit/routes/create (RequestHandlers.Routes.cs).
                 ["airplane"] = TransportType.Airplane,
                 ["air"] = TransportType.Airplane,
+                ["ship"] = TransportType.Ship,
+                ["ferry"] = TransportType.Ferry,
             };
 
         private EntityQuery m_TransitStopQuery;
@@ -381,6 +383,10 @@ namespace CS2MCP
             {
                 return BridgeResponse.Error(400, "airplane gates belong to airport buildings; place an airport with cs2_place_roadside");
             }
+            if (type == TransportType.Ship || type == TransportType.Ferry)
+            {
+                return BridgeResponse.Error(400, $"{typeName} piers belong to harbor buildings; place one with cs2_place_shoreline");
+            }
             if (!request.TryGetFloat("x", out float x) || !request.TryGetFloat("z", out float z))
             {
                 return BridgeResponse.Error(400, "provide ?x=<float>&z=<float>: a point beside the road, on the side where the stop should go");
@@ -549,9 +555,9 @@ namespace CS2MCP
             {
                 return error;
             }
-            if (type == TransportType.Airplane)
+            if (type == TransportType.Airplane || type == TransportType.Ship || type == TransportType.Ferry)
             {
-                return BridgeResponse.Error(400, "airplane lines and cargo routes are created with cs2_create_route");
+                return BridgeResponse.Error(400, $"{typeName} lines and cargo routes are created with cs2_create_route");
             }
             if (!request.Query.TryGetValue("stops", out string rawStops) || string.IsNullOrEmpty(rawStops))
             {
@@ -1220,7 +1226,7 @@ namespace CS2MCP
             typeName = null;
             if (!kTransitTypes.TryGetValue(raw.Trim(), out type))
             {
-                error = BridgeResponse.Error(400, $"unknown transit type '{raw}'; use bus, tram, metro (subway), train or airplane (listing; create air routes with cs2_create_route)");
+                error = BridgeResponse.Error(400, $"unknown transit type '{raw}'; use bus, tram, metro (subway), train, airplane, ship or ferry (airplane/ship/ferry lines are created with cs2_create_route)");
                 return false;
             }
             typeName = TransitTypeName(type);
