@@ -96,7 +96,7 @@ claude mcp add cs2 -- node <repo-path>\mcp-server\dist\index.js
 
 Start the game, load a save, then ask Claude: "How are my city's finances?", "Zone a residential area by the river", "Build a road connecting the industrial area to the highway".
 
-## Tool Reference (77 tools)
+## Tool Reference (78 tools)
 
 **State & view**
 
@@ -123,6 +123,7 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_zoning` | Zoning summary (occupied/empty per zone type) |
 | `cs2_notifications` | All in-world warning icons (no power/water, abandoned...) with target entities |
 | `cs2_traffic` | City-wide traffic flow, worst roads (flow %, volume, four daily periods) and traffic bottlenecks, with the game's own numbers |
+| `cs2_traffic_diagnose` | Why one road or junction is jammed: junction layout and lanes, vehicle types and what they wait for, through vs local traffic and destination clusters, turning movements from the vehicles' paths, parallel streets, and traffic-engineering findings with the tools to fix each |
 | `cs2_vehicles` | Census of driving vehicles by type and destination, what stopped vehicles wait for, the queue heads holding traffic up and any gridlock loops |
 | `cs2_road_graph` | Road segments of an area with their junctions, direction, flow and traffic lights (optionally every network, incl. station tracks) |
 | `cs2_inspect` | Single-entity detail (residents/employees/status flags) |
@@ -193,7 +194,7 @@ Every construction tool (place, road, road upgrade, junction, district, zone, de
 
 ### Prompts and resources
 
-Besides tools, the server offers MCP **prompts** (ready-made workflows): `city_health_check` (read-only audit), `fix_service_coverage`, `connect_station`, `plan_transit_line`, `balance_budget`; and **resources**: `cs2://guide` (coordinates, ids, safe-change rules, typical flows) and live JSON snapshots `cs2://game/state`, `cs2://city/overview`, `cs2://city/budget`, `cs2://city/demand`, `cs2://city/services`, `cs2://city/coverage`.
+Besides tools, the server offers MCP **prompts** (ready-made workflows): `city_health_check` (read-only audit), `fix_service_coverage`, `connect_station`, `plan_transit_line`, `fix_traffic_jam` (diagnose, one change at a time, measure before/after), `balance_budget`; and **resources**: `cs2://guide` (coordinates, ids, safe-change rules, typical flows), `cs2://guide/traffic` (traffic engineering playbook: method, cause-to-fix table, real-world measures the game lacks) and live JSON snapshots `cs2://game/state`, `cs2://city/overview`, `cs2://city/budget`, `cs2://city/demand`, `cs2://city/services`, `cs2://city/coverage`.
 
 ## Troubleshooting
 

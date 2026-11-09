@@ -179,6 +179,8 @@ namespace CS2MCP
                     return BuyMapTiles(request);
                 case "/city/traffic":
                     return CityTraffic(request);
+                case "/city/traffic/diagnose":
+                    return DiagnoseTraffic(request);
                 case "/city/vehicles":
                     return VehicleCensus(request);
                 case "/city/road-graph":

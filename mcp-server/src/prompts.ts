@@ -38,9 +38,57 @@ export const GUIDE = `# Using cs2-mcp
 - Simulation: cs2_run_simulation for N in-game hours, then re-read cs2_city_overview / cs2_demand.
 - Why people are unhappy: cs2_happiness; what the economy lacks: cs2_economy; progress: cs2_progression -> cs2_dev_tree.
 - Landscaping: cs2_terraform (raise/lower/level/soften), dryRun first.
+- Traffic jams: cs2_traffic -> cs2_traffic_diagnose on the worst bottleneck -> one fix -> cs2_run_simulation ->
+  cs2_traffic_diagnose again (see cs2://guide/traffic).
 
 ## Live resources
-cs2://game/state, cs2://city/overview, cs2://city/budget, cs2://city/demand, cs2://city/coverage, cs2://city/services
+cs2://guide/traffic (traffic engineering playbook), cs2://game/state, cs2://city/overview, cs2://city/budget, cs2://city/demand, cs2://city/coverage, cs2://city/services
+`;
+
+export const TRAFFIC_GUIDE = `# Fixing traffic jams in Cities: Skylines II
+
+Real-world traffic engineering, limited to what the game simulates and what the tools can change.
+
+## Method (do not skip)
+1. cs2_save_game.
+2. Find the jam: cs2_traffic (worst roads, bottlenecks) and cs2_vehicles (queueHeads = where queues start,
+   deadlocks = gridlock loops). The visible jam is often the tail; the cause is at the queue head.
+3. cs2_traffic_diagnose on the queue head or bottleneck. Keep its baseline block.
+4. Change ONE thing, dryRun first. Fix the cause the findings point to, not the symptom.
+5. cs2_run_simulation for 3-6 in-game hours (traffic values refresh about every 45 in-game minutes; compare the
+   same time of day if possible).
+6. cs2_traffic_diagnose with the same focus and cs2_traffic around it. Keep the change only if flow rose and stopped
+   vehicles fell without moving the jam next door. Otherwise undo it (the bridge cannot load a save; reverse the
+   change, or reload the save in the game).
+
+## Causes and fixes
+| Finding | What happens | Fixes (tools) |
+|---|---|---|
+| signalDelay | Lights give each direction only part of the time | Remove lights or all-way stop on small junctions (cs2_set_junction_control); separate the dominant movement with a ramp or overpass (cs2_connect_road smooth=true, elevation) |
+| crossingConflict | Busy unsignalised junction, vehicles wait for gaps | Lights (cs2_set_junction_control mode=lights); fewer conflicting movements: one-way minor leg (cs2_replace_road) or end the minor road before the junction |
+| crossingTurns | Turns across oncoming traffic block the lane behind | Wider road with more lanes (cs2_upgrade_road); move the turn to a signalised junction; ramp for the dominant turn |
+| shortJunctionSpacing | Queues spill from one junction into the next | Remove or merge one connection (cs2_demolish the short link), one-way pair, move the side road |
+| laneDrop | Lanes merge at one point | Keep the lane count to the next junction (cs2_upgrade_road) or end the extra lane as an exit |
+| lowCapacity | One lane per direction carries through traffic | Upgrade the road, or give the traffic another route |
+| junctionLimited | Wide road jammed anyway | Do not add lanes (induced demand); fix the junctions, add parallel routes, add transit |
+| throughTraffic | Minor road used as a shortcut | Road hierarchy: an arterial or highway route that is faster (cs2_build_road, cs2_upgrade_road); local streets should not be the fastest way through |
+| outsideConnection | Traffic to the highway funnels through | Smooth on/off ramps, more ramp lanes, a second connection; cargo to rail, harbor or air |
+| destinationCluster | One area attracts most trips | More access points from other directions, an arterial link, a transit line to it |
+| truckHeavy | Freight in city traffic | Direct highway access for industry, cargo rail/harbor/airport, keep trucks off residential streets |
+| carDependent | Almost all private cars | Bus or tram line along the corridor with stops at the destination clusters, mixed zoning to shorten trips |
+| accessConflict | Vehicles entering from buildings interrupt flow | Serve buildings from a side street; separate through traffic |
+
+## Principles that hold in the game
+- Hierarchy: local streets -> collectors -> arterials -> highways, joined level by level. Avoid local streets
+  connecting straight onto highways or big arterials.
+- Fewer conflict points beat more lanes. Every junction on an arterial costs capacity; space them out.
+- Drivers pick routes by cost; an alternative only helps when it is clearly better than the jammed road.
+- Highways: on- and off-ramps need length and the same lane count in and out (no lane drop at the merge).
+- Public transport and cargo rail remove vehicles; that scales better than widening.
+
+## Real-world measures the game does not have
+Signal timing plans, ramp metering, congestion pricing and tolls, flexible work hours, lane-by-lane
+turn restrictions (vanilla). Do not propose them as tool actions.
 `;
 
 export function registerPromptsAndResources(server: McpServer, bridgeJson: BridgeJson): void {
@@ -54,6 +102,17 @@ export function registerPromptsAndResources(server: McpServer, bridgeJson: Bridg
       mimeType: "text/markdown",
     },
     async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: GUIDE }] }),
+  );
+
+  server.registerResource(
+    "cs2-traffic-guide",
+    "cs2://guide/traffic",
+    {
+      title: "Traffic engineering playbook",
+      description: "Method and cause-to-fix table for traffic jams, matched to cs2_traffic_diagnose findings",
+      mimeType: "text/markdown",
+    },
+    async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: TRAFFIC_GUIDE }] }),
   );
 
   const snapshots: Array<{ name: string; uri: string; title: string; path: string; description: string }> = [
@@ -160,6 +219,28 @@ export function registerPromptsAndResources(server: McpServer, bridgeJson: Bridg
           "cs2_list_transit_lines and stops with cs2_list_transit_stops, place missing stops (cs2_place_transit_stop for " +
           "bus/tram), create the line with cs2_create_transit_line and make sure a depot of that type exists. Report the " +
           "route, stop count and expected usage, and check cs2_list_transit_lines after running the simulation.",
+      ),
+  );
+
+  server.registerPrompt(
+    "fix_traffic_jam",
+    {
+      title: "Fix a traffic jam",
+      description: "Find the worst jam, diagnose its cause and fix it one measured change at a time",
+      argsSchema: {
+        area: z.string().optional().describe("Optional area hint, e.g. 'x=1200,z=-300' (default: the worst jam in the city)"),
+      },
+    },
+    ({ area }) =>
+      userPrompt(
+        `${SAFETY_RULES}\n\n` +
+          `Fix the worst traffic jam${area ? ` around ${area}` : " in my city"}. Read the cs2://guide/traffic resource ` +
+          "first and follow its method. Find the queue head with cs2_traffic and cs2_vehicles, run cs2_traffic_diagnose " +
+          "on it and note the baseline. Explain the cause in one or two sentences using the findings and turning " +
+          "movements. Then apply one fix at a time (dryRun first), run the simulation 3-6 in-game hours, diagnose the " +
+          "same focus again and compare with the baseline. Keep a change only if it helped; stop after three attempts " +
+          "and report each change with its before/after flow and stopped vehicles. Never demolish buildings to widen " +
+          "roads without asking me.",
       ),
   );
 

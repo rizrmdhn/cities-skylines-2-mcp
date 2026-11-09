@@ -525,9 +525,18 @@ namespace CS2MCP
 
         private string DestinationKind(Entity car)
         {
+            return DestinationKindOf(DestinationEntity(car));
+        }
+
+        /// <summary>
+        /// Where a vehicle is heading: the building it targets (through the renter's property and up from
+        /// parking or sub-objects), an outside connection, a street, or Entity.Null.
+        /// </summary>
+        private Entity DestinationEntity(Entity car)
+        {
             if (!EntityManager.HasComponent<Target>(car))
             {
-                return "none";
+                return Entity.Null;
             }
             Entity target = EntityManager.GetComponentData<Target>(car).m_Target;
             // Companies and households target through the building they rent.
@@ -538,17 +547,19 @@ namespace CS2MCP
             // Parking and building lanes, sub-buildings: walk up to the owning object.
             for (int i = 0; i < 4 && target != Entity.Null && EntityManager.Exists(target); i++)
             {
-                if (EntityManager.HasComponent<Game.Objects.OutsideConnection>(target))
-                {
-                    return "outsideCity";
-                }
-                if (EntityManager.HasComponent<Building>(target) || !EntityManager.HasComponent<Owner>(target))
+                if (EntityManager.HasComponent<Game.Objects.OutsideConnection>(target)
+                    || EntityManager.HasComponent<Building>(target) || !EntityManager.HasComponent<Owner>(target))
                 {
                     break;
                 }
                 target = EntityManager.GetComponentData<Owner>(target).m_Owner;
             }
-            if (target == Entity.Null || !EntityManager.Exists(target))
+            return target != Entity.Null && EntityManager.Exists(target) ? target : Entity.Null;
+        }
+
+        private string DestinationKindOf(Entity target)
+        {
+            if (target == Entity.Null)
             {
                 return "none";
             }
