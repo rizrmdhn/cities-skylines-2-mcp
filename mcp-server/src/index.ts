@@ -1554,6 +1554,48 @@ server.registerTool(
 );
 
 server.registerTool(
+  "cs2_traffic_diagnose",
+  {
+    title: "Diagnose a traffic jam",
+    description:
+      "Why one road segment or junction is congested. Returns the junction layout (legs, lanes toward/away per " +
+      "leg, lights/stop/roundabout/priority, distance to the next junction), the vehicles on and around it (type, " +
+      "what stopped ones wait for, destinations, how many are passing through vs local, the 500 m areas most of them " +
+      "head to), turning movements through each junction from the vehicles' own planned paths (with turns across " +
+      "oncoming traffic marked), parallel streets that could take load, and findings: rule-of-thumb causes from traffic " +
+      "engineering (signal delay, crossing conflicts, turns across traffic, short junction spacing, lane drops, through " +
+      "traffic on minor roads, truck share, single destination cluster) each with evidence and the tools to fix it. " +
+      "Pick the focus from cs2_traffic (bottlenecks / worstRoads) or cs2_vehicles (queueHeads). Take it while the jam " +
+      "is present; the baseline block is what to compare after a change.",
+    inputSchema: {
+      index: z.number().int().optional().describe("Road segment or junction entity index (with version)"),
+      version: z.number().int().optional().describe("Entity version"),
+      x: z.number().optional().describe("Or a point: the nearest road within 300 m is used (its junction if the point is on one)"),
+      z: z.number().optional().describe("Point Z"),
+      localRadius: z
+        .number()
+        .min(200)
+        .max(5000)
+        .optional()
+        .describe("Trips ending within this distance of the focus count as local, the rest as through traffic (default 1000)"),
+    },
+  },
+  async ({ index, version, x, z: zCoord, localRadius }) => {
+    const params = new URLSearchParams();
+    if (index !== undefined) params.set("index", String(index));
+    if (version !== undefined) params.set("version", String(version));
+    if (x !== undefined) params.set("x", String(x));
+    if (zCoord !== undefined) params.set("z", String(zCoord));
+    if (localRadius !== undefined) params.set("localRadius", String(localRadius));
+    try {
+      return jsonResult(await bridgeJson(`/city/traffic/diagnose?${bridgeQueryString(params)}`));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
   "cs2_vehicles",
   {
     title: "Vehicle census and queue heads",
