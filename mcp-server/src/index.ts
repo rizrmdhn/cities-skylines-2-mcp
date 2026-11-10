@@ -1687,8 +1687,10 @@ server.registerTool(
       "nothing in range start freely on the terrain. Straight, or curved through cx/cz (needed where tracks must " +
       "leave a junction smoothly). Use for new road links and ramps, and for track spurs to station tracks (find " +
       "those with cs2_building_connections). smooth=true makes each snapped end continue the direction of what it " +
-      "joins (merge/diverge ramps onto a highway, track continuing a station's track end). Validated by the game; " +
-      "costs money like a player build.",
+      "joins (merge/diverge ramps onto a highway, track continuing a station's track end). For flyover ramps give " +
+      "the elevated end e1/e2: it then only joins networks at that height. A new segment leaving a junction along " +
+      "the same line as an existing one is merged into it by the game, so start ramps at a separate point. " +
+      "Validated by the game; costs money like a player build.",
     inputSchema: {
       prefab: z.string().describe("Exact network prefab name (cs2_find_prefabs category road or net)"),
       x1: z.number().describe("Start X"),
@@ -1698,8 +1700,17 @@ server.registerTool(
       cx: z.number().optional().describe("Curve control point X (with cz)"),
       cz: z.number().optional().describe("Curve control point Z"),
       snap: z.number().min(0).max(50).optional().describe("Snap distance in meters (default 8; 0 = never snap)"),
-      e1: z.number().optional().describe("Elevation of a free (unsnapped) start in meters: >0 bridge/flyover, <0 tunnel"),
-      e2: z.number().optional().describe("Elevation of a free (unsnapped) end in meters"),
+      e1: z
+        .number()
+        .optional()
+        .describe(
+          "Start elevation in meters above terrain: >0 bridge/flyover, <0 tunnel. When given, the start only snaps to " +
+            "networks within 4 m of that height (so an elevated end over a road does not drop onto it); a free start is built at it",
+        ),
+      e2: z
+        .number()
+        .optional()
+        .describe("End elevation in meters above terrain; snapping is limited to that height like e1"),
       smooth: z.boolean().optional().describe("Tangent-continuous ends: follow the split road or continue a dead end (not with cx/cz)"),
       force: z.boolean().optional().describe("Build even if the prefab is milestone-locked"),
       dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
