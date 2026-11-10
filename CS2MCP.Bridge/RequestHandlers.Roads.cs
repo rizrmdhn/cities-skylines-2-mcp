@@ -53,17 +53,21 @@ namespace CS2MCP
             NetData netData = EntityManager.GetComponentData<NetData>(prefabEntity);
 
             TerrainHeightData heightData = World.GetOrCreateSystemManaged<TerrainSystem>().GetHeightData();
-            BridgeRoadToolSystem.BuildEnd start = ResolveBuildEnd(new float2(x1, z1), snap, netData, ref heightData);
-            BridgeRoadToolSystem.BuildEnd end = ResolveBuildEnd(new float2(x2, z2), snap, netData, ref heightData);
+            // An end given an elevation only snaps to networks at that height, so a flyover end
+            // above a road stays elevated instead of dropping onto (and splitting) the road below.
+            float? e1 = request.TryGetFloat("e1", out float rawE1) ? math.clamp(rawE1, -30f, 60f) : (float?)null;
+            float? e2 = request.TryGetFloat("e2", out float rawE2) ? math.clamp(rawE2, -30f, 60f) : (float?)null;
+            BridgeRoadToolSystem.BuildEnd start = ResolveBuildEnd(new float2(x1, z1), snap, netData, ref heightData, e1);
+            BridgeRoadToolSystem.BuildEnd end = ResolveBuildEnd(new float2(x2, z2), snap, netData, ref heightData, e2);
             // Free ends can be raised (bridges, flyovers) or lowered (tunnels); snapped ends keep the height of what they join.
-            if (start.Entity == Entity.Null && request.TryGetFloat("e1", out float e1))
+            if (start.Entity == Entity.Null && e1.HasValue)
             {
-                start.Elevation = math.clamp(e1, -30f, 60f);
+                start.Elevation = e1.Value;
                 start.Position.y += start.Elevation;
             }
-            if (end.Entity == Entity.Null && request.TryGetFloat("e2", out float e2))
+            if (end.Entity == Entity.Null && e2.HasValue)
             {
-                end.Elevation = math.clamp(e2, -30f, 60f);
+                end.Elevation = e2.Value;
                 end.Position.y += end.Elevation;
             }
             if (start.Entity != Entity.Null && start.Entity == end.Entity)
@@ -166,13 +170,23 @@ namespace CS2MCP
             return straight;
         }
 
-        private BridgeRoadToolSystem.BuildEnd ResolveBuildEnd(float2 point, float snap, NetData netData, ref TerrainHeightData heightData)
+        /// <summary>
+        /// How far (m) a snap candidate may sit above or below the requested end height
+        /// (terrain + e1/e2) and still be joined.
+        /// </summary>
+        private const float SnapHeightTolerance = 4f;
+
+        private BridgeRoadToolSystem.BuildEnd ResolveBuildEnd(float2 point, float snap, NetData netData, ref TerrainHeightData heightData, float? elevation = null)
         {
             Entity bestNode = Entity.Null;
             float bestNodeDistance = snap;
             Entity bestEdge = Entity.Null;
             float bestEdgeDistance = snap;
             float bestT = 0f;
+            // With an explicit elevation, only networks near that height can be joined.
+            float? targetHeight = elevation.HasValue
+                ? TerrainUtils.SampleHeight(ref heightData, new float3(point.x, 0f, point.y)) + elevation.Value
+                : (float?)null;
             using (NativeArray<Entity> edges = NetEdgeQuery.ToEntityArray(Allocator.Temp))
             {
                 foreach (Entity edge in edges)
@@ -197,7 +211,12 @@ namespace CS2MCP
                     Edge ends = EntityManager.GetComponentData<Edge>(edge);
                     foreach (Entity node in new[] { ends.m_Start, ends.m_End })
                     {
-                        float nodeDistance = math.distance(EntityManager.GetComponentData<Node>(node).m_Position.xz, point);
+                        float3 nodePosition = EntityManager.GetComponentData<Node>(node).m_Position;
+                        if (targetHeight.HasValue && math.abs(nodePosition.y - targetHeight.Value) > SnapHeightTolerance)
+                        {
+                            continue;
+                        }
+                        float nodeDistance = math.distance(nodePosition.xz, point);
                         if (nodeDistance < bestNodeDistance)
                         {
                             bestNodeDistance = nodeDistance;
@@ -205,6 +224,10 @@ namespace CS2MCP
                         }
                     }
                     float edgeDistance = MathUtils.Distance(curve.xz, point, out float t);
+                    if (targetHeight.HasValue && math.abs(MathUtils.Position(curve, t).y - targetHeight.Value) > SnapHeightTolerance)
+                    {
+                        continue;
+                    }
                     if (edgeDistance < bestEdgeDistance)
                     {
                         bestEdgeDistance = edgeDistance;
