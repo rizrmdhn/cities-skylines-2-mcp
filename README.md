@@ -67,11 +67,18 @@ The MCP server loads `mcp-server/.env` via [dotenv](https://github.com/motdotla/
 | `CS2MCP_PORT` | game process | `8642` | Bridge listen port (change both together) |
 | `CS2MCP_TOKEN` | game process **and** MCP server | *(unset)* | Optional shared secret sent as `X-CS2MCP-Token`; when set for the game, every route except `/ping` requires it. Independently, requests with an `Origin` header or a non-loopback `Host` are always rejected, and state-changing routes require POST |
 | `CS2MCP_READONLY` | game process | *(unset)* | `1` forces read-only mode: every state-changing route is refused with 403 (same as the in-game option) |
+| `CS2MCP_SPEND_LIMIT` | game process | *(unset)* | Most money AI build requests may spend per loaded save; overrides the in-game slider |
 | `CS2_PATH` | build time | auto-probed | Game install folder |
 
 ### In-game options
 
 **Options > CS2MCP** in the game has two switches: **Accept AI requests** (off = every route except `/ping` answers 503) and **Read-only mode** (AI clients can read data, move the camera and take screenshots, but every build, demolish, zoning, money, policy, simulation or save request is refused). `cs2_ping` reports both, plus the bridge and MCP server versions with a warning when they differ.
+
+**AI spending limit** (a slider in thousands, 0 = off) caps the money build requests may spend per loaded save: buildings, roads, interchanges, transit and map tiles. Once it is reached further build requests are refused (dry runs still work) until you press **Reset AI spending counter** or reload the save. `cs2_history` shows the amount spent so far and every change made through the bridge.
+
+### Timeouts and retries
+
+The MCP server tells the bridge how long it will wait for each request (`X-CS2MCP-Timeout-Ms`) and gives every state-changing request an id (`X-CS2MCP-Request-Id`). A request the game never picked up in time (still loading, for instance) is withdrawn and answered 503: it will not run later. A request that started but did not finish in time is answered 504, and asking again with the same id returns that run's result instead of running it twice; the MCP server does this by itself.
 
 ## Using with Claude
 
@@ -96,7 +103,7 @@ claude mcp add cs2 -- node <repo-path>\mcp-server\dist\index.js
 
 Start the game, load a save, then ask Claude: "How are my city's finances?", "Zone a residential area by the river", "Build a road connecting the industrial area to the highway".
 
-## Tool Reference (88 tools)
+## Tool Reference (91 tools)
 
 **State & view**
 
@@ -146,6 +153,8 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_replace_net` | Same for any network family, including train, tram and subway tracks (up to 30 segments, all or nothing) |
 | `cs2_specialized_area` | Specialized industry (agriculture, forestry, ore, oil, fish): list, place the hub with its extractor building, redraw its extractor area |
 | `cs2_connect_road` | Build a road or track whose ends snap to existing junctions or split existing segments (like the road tool's snapping), optionally raised or lowered; `smooth` makes the ends continue the direction of what they join (merge/diverge ramps, track leaving a station) |
+| `cs2_build_interchange` | Plan and build a whole interchange in one call: `diamond` or `parclo` (service: highway to arterial/local road), `cloverleaf` or `trumpet` (system: highway to highway). See [Interchanges](#interchanges) |
+| `cs2_batch` | Run up to 96 build operations (place, road, connect, upgrade, zone, demolish) in order inside the game and return every step's result; stops at the first failure by default |
 | `cs2_building_connections` | Open track/road/path/waterway ends of a station, depot or harbor that still need joining, with their outward direction |
 | `cs2_building_upgrades` / `cs2_place_upgrade` | A service building's upgrade menu (cost, locked, already built, placement) / install an upgrade through the game's upgrade pipeline |
 | `cs2_terraform` | Landscaping brush: raise, lower, level (to a height) or soften at a point, validated by the game |
@@ -159,7 +168,25 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_move_building` | Relocate a service/signature building, service upgrade, park or prop to a new position/rotation without demolishing it (the game's Relocate pipeline: same entity, upgrades, workers and vehicles kept; validated by the game, `dryRun` to probe) |
 | `cs2_list_buildings` / `cs2_list_roads` / `cs2_list_objects` | Entity listings (ids, coordinates) |
 
-Every construction tool (place, road, road upgrade, junction, district, zone, demolish, move, upgrade, terraform) accepts `dryRun=true`: the game validates the change and reports whether it would be accepted and what it costs, without applying it.
+Every construction tool (place, road, road upgrade, junction, district, zone, demolish, move, upgrade, terraform, batch, interchange) accepts `dryRun=true`: the game validates the change and reports whether it would be accepted and what it costs, without applying it. Only one build operation runs at a time; a second one sent while the first is still in the game's tool pipeline is answered 409 rather than displacing it.
+
+#### Interchanges
+
+`cs2_build_interchange` lays out the ramps from real highway design practice and builds them through `cs2_connect_road`, so every segment is validated by the game:
+
+| Type | Kind | Layout | Needs |
+|---|---|---|---|
+| `diamond` | service | Four ramps meeting the minor road at two junctions; the most common highway exit | Two roads already crossing at different levels |
+| `parclo` | service | Partial cloverleaf (Parclo A4 / B4, the Ontario standard): a diamond whose left turns are replaced by two loops. `variant=A` puts the loops ahead of the crossing as on-ramps, `B` beyond it as off-ramps | Same |
+| `cloverleaf` | system | Four loops and four outer ramps, free-flowing with one bridge (Simpang Susun Semanggi, the German *Kleeblatt*) | Same, and a square of about 700 m |
+| `trumpet` | system | Three-leg T: stem bridge, one loop, one semi-direct ramp, two plain ramps; the usual end-of-highway and toll-plaza layout | A two-way road ending 150-500 m short of the through road, facing it roughly square; the tool builds the bridge |
+
+- Loop radius comes from the AASHTO minimum-radius formula `R = V² / (127 (e + f))` at 6 % superelevation: `designSpeed` 30 km/h gives 21 m, 40 (default) 43 m, 50 79 m. `radius` overrides it.
+- Ramp grades are held to 8 % (the plan is refused above that; 6 % is the preferred limit and anything over it is noted).
+- Diamond terminals sit 90 m from the major road by default (`terminalOffset`), ramps leave and join it 260 m from the crossing (`rampLength`); both are raised automatically where loops need the room.
+- Works with dual one-way carriageways and single two-way roads, and mirrors itself for left-hand traffic. The highway is taken as the major road (`swap=true` to reverse); the ramp prefab defaults to the narrowest unlocked one-way road of the major road's class (`ramp=` to choose).
+- Run it with `dryRun=true` first: it returns each ramp's length, grade and end points, the cost, and any segment the game refuses. When building, a refused segment rolls the interchange back (segments already built are demolished; the extra nodes left on the existing roads are harmless).
+- Not covered: stack and turbine interchanges, a trumpet on a one-way pair, at-grade crossings (replace the junction with a bridge first) and roads that curve within the ramp length.
 
 **Finance & policy**
 
@@ -194,7 +221,8 @@ Every construction tool (place, road, road upgrade, junction, district, zone, de
 | Tool | Description |
 |---|---|
 | `cs2_set_simulation` | Pause / set speed (0-8) |
-| `cs2_run_simulation` | Timed run: simulate N in-game hours, then auto-pause (closes blocking milestone popups by default) |
+| `cs2_run_simulation` | Timed run: simulate N in-game hours, then auto-pause (closes blocking milestone popups by default); `waitSeconds` blocks until it has finished and returns the resulting state |
+| `cs2_history` | Change log of everything changed through the bridge since the save was loaded (parameters, result, treasury change), money spent by builds and the player's AI spending limit |
 | `cs2_popups` | Blocking popup status: pending milestone/signature dialogs, forced-pause reason |
 | `cs2_dismiss_popups` | Close open milestone/signature popups (releases the forced pause) |
 | `cs2_set_popups` | Turn the game's blocking popups off, or let the mod auto-close them |

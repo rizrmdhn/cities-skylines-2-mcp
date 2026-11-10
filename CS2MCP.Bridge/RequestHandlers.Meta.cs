@@ -205,7 +205,7 @@ namespace CS2MCP
                 availableToPurchase = tiles.GetAvailableTiles(),
                 upkeepEnabled = tiles.GetMapTileUpkeepEnabled(),
                 upkeepCostMultiplier = tiles.GetMapTileUpkeepCostMultiplier(owned),
-                note = "tile purchasing via API is planned (v0.9); buy tiles in the game UI for now",
+                note = "list purchasable tiles with /city/tiles/list and buy them with /city/tiles/buy (cs2_list_map_tiles / cs2_buy_map_tiles)",
             });
         }
 

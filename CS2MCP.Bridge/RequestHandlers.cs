@@ -227,12 +227,17 @@ namespace CS2MCP
                     return ListLineVehicles(request);
                 case "/transit/lines/vehicles/set":
                     return SetLineVehicles(request);
+                case "/build/batch":
+                    return RunBatch(request);
+                case "/build/interchange":
+                    return BuildInterchange(request);
+                case "/history":
+                    return GetHistory(request);
                 default:
                     return BridgeResponse.Error(404,
-                        $"unknown endpoint: {request.Path}; available: /ping /state /city/overview /city/demand " +
-                        "/city/budget /city/services /city/labor /city/statistics /city/taxes /city/taxes/set " +
-                        "/city/policies /city/policies/set /city/service-budgets /city/service-budgets/set " +
-                        "/prefabs /build/place /build/demolish /city/buildings /sim/control /screenshot");
+                        $"unknown endpoint: {request.Path}. Endpoints are grouped under /state, /city/*, /build/*, /transit/*, " +
+                        "/district*, /sim/*, /ui/popups*, /camera*, /prefabs*, /zones, /entity/inspect, /tools/status, /history, " +
+                        "/game/save and /screenshot; the MCP server (mcp-server/src/index.ts) lists every route and its parameters");
             }
         }
 

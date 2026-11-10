@@ -29,6 +29,8 @@ export const GUIDE = `# Using cs2-mcp
 - Every build/demolish/zone/upgrade/move/terraform tool takes dryRun=true: the game validates (and prices) the change
   without applying it.
 - Builds cost money like player builds and respect milestone locks (force=true overrides locks only).
+- One build operation runs at a time: send build calls one after another, or put them in one cs2_batch.
+- cs2_history lists what was changed and what it cost; the player may have set an AI spending limit (shown there).
 
 ## Typical flows
 - Service gaps: cs2_coverage -> worstGaps -> cs2_find_prefabs -> cs2_place_roadside / cs2_place_building (dryRun) -> build.
@@ -43,6 +45,10 @@ export const GUIDE = `# Using cs2-mcp
 - Builds stuck on "another build operation is in progress": cs2_tool_status.
 - Why people are unhappy: cs2_happiness; what the economy lacks: cs2_economy; progress: cs2_progression -> cs2_dev_tree.
 - Landscaping: cs2_terraform (raise/lower/level/soften), dryRun first.
+- Many pieces at once (a road of several segments, roads plus zoning): cs2_batch, dryRun first.
+- Interchanges: cs2_build_interchange dryRun=true -> read ramps/problems -> build. diamond or parclo joins a highway to
+  an arterial or local road (service interchange); cloverleaf or trumpet joins two highways (system interchange). The
+  two roads must already cross on different levels (trumpet: the minor road ends short of the through road).
 - Traffic jams: cs2_traffic -> cs2_traffic_diagnose on the worst bottleneck -> one fix -> cs2_run_simulation ->
   cs2_traffic_diagnose again (see cs2://guide/traffic).
 

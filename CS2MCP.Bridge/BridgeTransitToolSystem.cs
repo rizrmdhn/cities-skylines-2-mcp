@@ -142,7 +142,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueueStop(Entity prefabEntity, PrefabBase prefab, string typeName, ControlPoint controlPoint, BridgeRequest request)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -160,7 +160,7 @@ namespace CS2MCP
         public bool TryQueueLine(Entity prefabEntity, PrefabBase prefab, string typeName, LineStop[] stops,
             bool hasColor, UnityEngine.Color32 color, string name, int depotCount, BridgeRequest request)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -185,7 +185,7 @@ namespace CS2MCP
             m_DefinitionRounds = 0;
             m_Deadline = DateTime.UtcNow.AddSeconds(kPathfindTimeoutSeconds);
             m_Stage = Stage.CreateDefinitions;
-            m_PreviousTool = m_ToolSystem.activeTool;
+            m_PreviousTool = BridgeTools.PreviousTool(m_ToolSystem);
             m_ToolSystem.activeTool = this;
         }
 

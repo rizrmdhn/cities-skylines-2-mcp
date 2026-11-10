@@ -7,6 +7,7 @@
  * CS2_BRIDGE_URL environment variable).
  */
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -28,15 +29,30 @@ function isMutatingPath(path: string): boolean {
   );
 }
 
-async function bridgeFetch(path: string, timeoutMs: number): Promise<Response> {
+/** The bridge answers this long before the client-side abort, so a slow operation fails with the bridge's own message. */
+const BRIDGE_TIMEOUT_MARGIN_MS = 1_500;
+
+async function bridgeFetch(
+  path: string,
+  timeoutMs: number,
+  options: { requestId?: string; body?: unknown } = {},
+): Promise<Response> {
   const route = path.split("?", 1)[0];
-  // The bridge decodes the query with Uri.UnescapeDataString, which keeps '+' literal, so spaces
-  // (URLSearchParams writes them as '+'; a real '+' is already %2B) must go out as %20.
+  // Spaces go out as %20: URLSearchParams writes them as '+', which older bridge builds kept
+  // literal (a real '+' is already %2B, so this is safe for every bridge version).
   const query = path.slice(route.length).replace(/\+/g, "%20");
+  const headers: Record<string, string> = {
+    // How long we wait: the bridge holds the request that long instead of its 10 s default.
+    "X-CS2MCP-Timeout-Ms": String(Math.max(1_000, timeoutMs - BRIDGE_TIMEOUT_MARGIN_MS)),
+  };
+  if (BRIDGE_TOKEN) headers["X-CS2MCP-Token"] = BRIDGE_TOKEN;
+  if (options.requestId) headers["X-CS2MCP-Request-Id"] = options.requestId;
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
   try {
     return await fetch(`${BRIDGE_URL}${route}${query}`, {
       method: isMutatingPath(route) ? "POST" : "GET",
-      headers: BRIDGE_TOKEN ? { "X-CS2MCP-Token": BRIDGE_TOKEN } : {},
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
@@ -47,8 +63,18 @@ async function bridgeFetch(path: string, timeoutMs: number): Promise<Response> {
   }
 }
 
-async function bridgeJson(path: string, timeoutMs = 12_000): Promise<unknown> {
-  const res = await bridgeFetch(path, timeoutMs);
+/** Times a state-changing request is re-asked (same request id) while the bridge reports it still running. */
+const IN_PROGRESS_RETRIES = 3;
+
+async function bridgeJson(path: string, timeoutMs = 12_000, body?: unknown): Promise<unknown> {
+  // A state-changing request carries an id: when the bridge says "started but not finished"
+  // (HTTP 504) we ask again with the same id and get that run's result, never a second run.
+  const requestId = isMutatingPath(path.split("?", 1)[0]) ? randomUUID() : undefined;
+  let res = await bridgeFetch(path, timeoutMs, { requestId, body });
+  for (let attempt = 0; res.status === 504 && requestId && attempt < IN_PROGRESS_RETRIES; attempt++) {
+    await res.text();
+    res = await bridgeFetch(path, timeoutMs, { requestId, body });
+  }
   const text = await res.text();
   let payload: unknown;
   try {
@@ -150,7 +176,8 @@ server.registerTool(
     title: "Get RCI zoning demand",
     description:
       "Residential (low/medium/high density), commercial, industrial, office and storage demand " +
-      "of the loaded city (0-100), including the demand factors that explain WHY demand is high or low " +
+      "of the loaded city (buildingDemand on the game's internal 0-255 scale, where 255 is a full demand bar; " +
+      "companyDemand counters can go higher), including the demand factors that explain WHY demand is high or low " +
       "(e.g. Taxes, Unemployment, EmptyZones, Homelessness). Positive factor values push demand up, " +
       "negative values push it down.",
     inputSchema: {},
@@ -1106,7 +1133,8 @@ server.registerTool(
     title: "Set a service fee",
     description:
       "Set the fee/price for one service resource (name from cs2_get_fees). Higher fees raise income " +
-      "but reduce usage and citizen happiness.",
+      "but reduce usage and citizen happiness. The value is clamped to the fee's slider range " +
+      "(sliderRange in cs2_get_fees); the response says what was applied.",
     inputSchema: {
       resource: z.string().describe("Resource name from cs2_get_fees, e.g. 'Electricity'"),
       fee: z.number().describe("New fee value"),
@@ -1158,8 +1186,9 @@ server.registerTool(
     title: "Run simulation for N in-game hours",
     description:
       "Unpause and run the simulation at the given speed, auto-pausing after the requested number of " +
-      "in-game hours. Returns immediately with the target frame; poll cs2_game_state (frameIndex) to " +
-      "track progress. Use cancel=true to stop early. The core loop for autonomous mayoring: " +
+      "in-game hours. Returns immediately with the target frame unless waitSeconds is given, in which case it " +
+      "blocks until the run has finished (or that many real seconds passed) and returns the resulting state " +
+      "and city overview in the same call. Use cancel=true to stop early. The core loop for autonomous mayoring: " +
       "act, run time forward, observe results. Milestone / signature-building popups force the game to " +
       "speed 0 while open; by default this run closes them automatically (dismissPopups) so it is not " +
       "silently held paused. The response's forcedPause tells you if something still holds it.",
@@ -1171,16 +1200,24 @@ server.registerTool(
         .boolean()
         .optional()
         .describe("Auto-close blocking milestone/signature popups during this run (default true)"),
+      waitSeconds: z
+        .number()
+        .min(1)
+        .max(55)
+        .optional()
+        .describe("Wait up to this many real seconds for the run to finish and return the result (saves polling)"),
     },
   },
-  async ({ hours, speed, cancel, dismissPopups }) => {
+  async ({ hours, speed, cancel, dismissPopups, waitSeconds }) => {
     const params = new URLSearchParams();
     if (cancel) params.set("cancel", "true");
     if (!cancel) params.set("dismissPopups", String(dismissPopups ?? true));
     if (hours !== undefined) params.set("hours", String(hours));
     if (speed !== undefined) params.set("speed", String(speed));
     try {
-      return jsonResult(await bridgeJson(`/sim/run?${bridgeQueryString(params)}`));
+      const run = await bridgeJson(`/sim/run?${bridgeQueryString(params)}`);
+      if (cancel || waitSeconds === undefined) return jsonResult(run);
+      return jsonResult({ run, ...(await waitForSimulationPause(waitSeconds)) });
     } catch (err) {
       return errorResult(err);
     }
@@ -1212,7 +1249,8 @@ server.registerTool(
 registerJsonTool(
   "cs2_tiles_info",
   "Get map tile info",
-  "Owned/total map tiles, tiles available to purchase and upkeep settings. (Purchasing via API arrives in v0.9.)",
+  "Owned/total map tiles, tiles available to purchase and upkeep settings. List purchasable tiles with " +
+    "cs2_list_map_tiles and buy them with cs2_buy_map_tiles.",
   "/city/tiles",
 );
 
@@ -1311,9 +1349,8 @@ function joinEntityOrPoints(items: z.infer<typeof entityOrPoint>[]): string {
 }
 
 /**
- * The bridge decodes query values with Uri.UnescapeDataString, which keeps '+'
- * literal, so spaces must go out as %20 (URLSearchParams writes '+'; a real '+'
- * is already %2B).
+ * Query string with spaces as %20 instead of URLSearchParams' '+' (bridgeFetch
+ * does the same again; a real '+' is already %2B).
  */
 function bridgeQueryString(params: URLSearchParams): string {
   return params.toString().replace(/\+/g, "%20");
@@ -1699,6 +1736,14 @@ server.registerTool(
       z2: z.number().describe("End Z"),
       cx: z.number().optional().describe("Curve control point X (with cz)"),
       cz: z.number().optional().describe("Curve control point Z"),
+      c2x: z
+        .number()
+        .optional()
+        .describe(
+          "Second control point X (with c2z, needs cx/cz): makes the segment a cubic curve that leaves the start toward " +
+            "cx/cz and arrives at the end from c2x/c2z, for S-curves and ramps with a set direction at each end",
+        ),
+      c2z: z.number().optional().describe("Second control point Z"),
       snap: z.number().min(0).max(50).optional().describe("Snap distance in meters (default 8; 0 = never snap)"),
       e1: z
         .number()
@@ -1716,7 +1761,7 @@ server.registerTool(
       dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
     },
   },
-  async ({ prefab, x1, z1, x2, z2, cx, cz, snap, e1, e2, smooth, force, dryRun }) => {
+  async ({ prefab, x1, z1, x2, z2, cx, cz, c2x, c2z, snap, e1, e2, smooth, force, dryRun }) => {
     const params = new URLSearchParams({
       prefab,
       x1: String(x1),
@@ -1726,6 +1771,8 @@ server.registerTool(
     });
     if (cx !== undefined) params.set("cx", String(cx));
     if (cz !== undefined) params.set("cz", String(cz));
+    if (c2x !== undefined) params.set("c2x", String(c2x));
+    if (c2z !== undefined) params.set("c2z", String(c2z));
     if (snap !== undefined) params.set("snap", String(snap));
     if (e1 !== undefined) params.set("e1", String(e1));
     if (e2 !== undefined) params.set("e2", String(e2));
@@ -2414,24 +2461,196 @@ server.registerTool(
     },
   },
   async ({ maxSeconds }) => {
-    const deadline = Date.now() + (maxSeconds ?? 50) * 1000;
     try {
-      let state: any = await bridgeJson("/state");
-      while (Date.now() < deadline) {
-        const sim = state?.simulation;
-        if (!sim || sim.paused || sim.forcedPause === "popup") break;
-        await new Promise((r) => setTimeout(r, 2000));
-        state = await bridgeJson("/state");
-      }
-      const overview = await bridgeJson("/city/overview").catch(() => null);
-      const sim = state?.simulation;
-      return jsonResult({
-        finishedWaiting: Boolean(sim?.paused),
-        stillRunning: Boolean(sim && !sim.paused),
-        state,
-        overview,
-        note: sim && !sim.paused ? "still running: call cs2_wait_simulation again or do other read-only checks" : undefined,
-      });
+      return jsonResult(await waitForSimulationPause(maxSeconds ?? 50));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+/** Polls the game state until the simulation is paused again (or a popup holds it), then adds the city overview. */
+async function waitForSimulationPause(maxSeconds: number) {
+  const deadline = Date.now() + maxSeconds * 1000;
+  let state: any = await bridgeJson("/state");
+  while (Date.now() < deadline) {
+    const sim = state?.simulation;
+    if (!sim || sim.paused || sim.forcedPause === "popup") break;
+    await new Promise((r) => setTimeout(r, 2000));
+    state = await bridgeJson("/state");
+  }
+  const overview = await bridgeJson("/city/overview").catch(() => null);
+  const sim = state?.simulation;
+  return {
+    finishedWaiting: Boolean(sim?.paused),
+    stillRunning: Boolean(sim && !sim.paused),
+    state,
+    overview,
+    note: sim && !sim.paused ? "still running: call cs2_wait_simulation again or do other read-only checks" : undefined,
+  };
+}
+
+const BATCH_TOOL_ROUTES = {
+  cs2_place_building: "/build/place",
+  cs2_build_road: "/build/road",
+  cs2_connect_road: "/build/road/connect",
+  cs2_upgrade_road: "/build/upgrade",
+  cs2_zone_area: "/build/zone",
+  cs2_demolish: "/build/demolish",
+} as const;
+
+server.registerTool(
+  "cs2_batch",
+  {
+    title: "Run several build operations in one call",
+    description:
+      "Run a list of build operations in order inside the game, each one waiting for the previous to finish, and get " +
+      "every step's result back in one response. Use it for anything made of several pieces (a road of many segments, " +
+      "a block of roads plus zoning, clearing a site) instead of one tool call per piece: it is much faster and the " +
+      "steps cannot collide with each other. Each operation names one of the build tools and gives that tool's own " +
+      "arguments. By default the batch stops at the first step that fails; steps before it stay built. dryRun=true " +
+      "validates every step without building (each step is checked against the current city, so a step that depends " +
+      "on an earlier one in the same batch may show as unconnected). For a whole interchange use cs2_build_interchange.",
+    inputSchema: {
+      operations: z
+        .array(
+          z.object({
+            tool: z
+              .enum(Object.keys(BATCH_TOOL_ROUTES) as [keyof typeof BATCH_TOOL_ROUTES, ...(keyof typeof BATCH_TOOL_ROUTES)[]])
+              .describe("Which build tool this step runs"),
+            args: z
+              .record(z.union([z.string(), z.number(), z.boolean()]))
+              .describe("That tool's arguments, exactly as you would pass them to it (e.g. prefab, x1, z1, x2, z2 for cs2_connect_road)"),
+            label: z.string().max(80).optional().describe("Short name for the step, echoed in the results"),
+          }),
+        )
+        .min(1)
+        .max(96)
+        .describe("Steps to run, in order"),
+      stopOnError: z.boolean().optional().describe("Stop at the first failing step (default true); false runs every step"),
+      dryRun: z.boolean().optional().describe("Validate every step without building anything"),
+    },
+  },
+  async ({ operations, stopOnError, dryRun }) => {
+    const body = {
+      operations: operations.map((operation) => ({
+        path: BATCH_TOOL_ROUTES[operation.tool],
+        query: operation.args,
+        label: operation.label ?? operation.tool,
+      })),
+      stopOnError: stopOnError ?? true,
+      dryRun: dryRun ?? false,
+    };
+    try {
+      return jsonResult(await bridgeJson("/build/batch", batchTimeoutMs(operations.length), body));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+/** A step takes a few game frames; allow for a slow frame rate and the game's own stalls. */
+function batchTimeoutMs(steps: number): number {
+  return Math.min(170_000, 20_000 + steps * 2_500);
+}
+
+server.registerTool(
+  "cs2_build_interchange",
+  {
+    title: "Build a highway interchange",
+    description:
+      "Plan and build a complete interchange in one call, with ramp geometry based on real highway design practice " +
+      "(loop radius from the AASHTO minimum-radius formula for the ramp design speed, ramp grades kept under 8 %, " +
+      "ramp-terminal spacing as used on real diamonds and parclos). Types - SERVICE interchanges (highway to an " +
+      "arterial or local road): 'diamond' (four ramps, two ordinary junctions on the minor road; the default choice), " +
+      "'parclo' (partial cloverleaf, Parclo A4/B4: a diamond whose left turns are replaced by two loop ramps; for a " +
+      "busy minor road). SYSTEM interchanges (highway to highway, free-flowing): 'cloverleaf' (four loops + four outer " +
+      "ramps, one bridge, needs a square of about 700 m), 'trumpet' (three-leg T: a road ending at a through highway; " +
+      "one bridge, a loop and a semi-direct ramp). " +
+      "Requirements: diamond, parclo and cloverleaf need the two roads to ALREADY cross at different levels (one on a " +
+      "bridge or in a cutting over the other, no junction between them) - give x/z at that crossing; the highway is " +
+      "taken as the major road. A trumpet needs the minor road to be a two-way road that stops 150-500 m short of the " +
+      "through road, pointing at it roughly square - give x/z at that dead end; the tool builds the bridge itself. " +
+      "Both roads must run fairly straight for the length of the ramps, and the land the ramps cross must be free. " +
+      "Works with dual one-way carriageways and single two-way roads, and with left-hand traffic. " +
+      "ALWAYS run it with dryRun=true first: it returns the planned ramps (length, grade, end points), the cost and " +
+      "any segment the game refuses, without changing anything. When building, a refused segment rolls the whole " +
+      "interchange back. Costs money like a player build.",
+    inputSchema: {
+      type: z.enum(["diamond", "parclo", "cloverleaf", "trumpet"]).describe("Interchange layout"),
+      x: z.number().describe("X of the crossing point (trumpet: of the minor road's dead end)"),
+      z: z.number().describe("Z of the crossing point (trumpet: of the minor road's dead end)"),
+      dryRun: z.boolean().optional().describe("Plan and validate only; nothing is built. Do this first"),
+      designSpeed: z
+        .number()
+        .min(20)
+        .max(80)
+        .optional()
+        .describe("Design speed of the loop ramps in km/h (default 40 -> 43 m radius; 30 -> 21 m compact urban, 50 -> 79 m)"),
+      radius: z.number().min(20).max(150).optional().describe("Loop radius in meters, overriding designSpeed"),
+      rampLength: z
+        .number()
+        .min(120)
+        .max(700)
+        .optional()
+        .describe("Distance along the major road from the crossing to where ramps leave/join it (default 260; raised automatically where loops need it)"),
+      terminalOffset: z
+        .number()
+        .min(40)
+        .max(300)
+        .optional()
+        .describe("diamond/parclo: distance from the major road to each ramp terminal on the minor road (default 90, i.e. 180 m between the two junctions)"),
+      variant: z
+        .enum(["A", "B"])
+        .optional()
+        .describe("parclo only: A = loops are on-ramps ahead of the crossing (default, Parclo A4), B = loops are off-ramps beyond it"),
+      clearance: z.number().min(5).max(20).optional().describe("trumpet only: height of the new bridge deck above the through road in meters (default 8)"),
+      ramp: z.string().optional().describe("Road prefab for the ramps (default: the narrowest unlocked one-way road of the major road's class)"),
+      swap: z.boolean().optional().describe("Treat the other road as the major one (diamond/parclo)"),
+      searchRadius: z.number().min(20).max(300).optional().describe("How far from x/z to look for the roads (default 120)"),
+      force: z.boolean().optional().describe("Use milestone-locked prefabs"),
+    },
+  },
+  async ({ type, x, z: zCoord, dryRun, designSpeed, radius, rampLength, terminalOffset, variant, clearance, ramp, swap, searchRadius, force }) => {
+    const params = new URLSearchParams({ type, x: String(x), z: String(zCoord) });
+    if (dryRun) params.set("dryRun", "true");
+    if (designSpeed !== undefined) params.set("designSpeed", String(designSpeed));
+    if (radius !== undefined) params.set("radius", String(radius));
+    if (rampLength !== undefined) params.set("rampLength", String(rampLength));
+    if (terminalOffset !== undefined) params.set("terminalOffset", String(terminalOffset));
+    if (variant) params.set("variant", variant);
+    if (clearance !== undefined) params.set("clearance", String(clearance));
+    if (ramp) params.set("ramp", ramp);
+    if (swap) params.set("swap", "true");
+    if (searchRadius !== undefined) params.set("searchRadius", String(searchRadius));
+    if (force) params.set("force", "true");
+    try {
+      // Up to ~30 segments, plus the same again to undo them if a late one is refused.
+      return jsonResult(await bridgeJson(`/build/interchange?${bridgeQueryString(params)}`, 150_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_history",
+  {
+    title: "Change log and spending",
+    description:
+      "What was changed in the city through this bridge since the save was loaded, newest first: each state-changing " +
+      "request with its parameters, result, in-game time and the treasury change across it (moneyDelta, negative = " +
+      "spent). Also reports the money spent by build operations this session and the player's AI spending limit, " +
+      "if one is set in the game's Options > CS2MCP page (build requests are refused once it is reached; only the " +
+      "player can raise it or reset the counter). There is no generic undo: remove something with cs2_demolish " +
+      "using the ids in its result.",
+    inputSchema: {
+      limit: z.number().int().min(1).max(300).optional().describe("Entries to return (default 50)"),
+    },
+  },
+  async ({ limit }) => {
+    try {
+      return jsonResult(await bridgeJson(limit ? `/history?limit=${limit}` : "/history"));
     } catch (err) {
       return errorResult(err);
     }
