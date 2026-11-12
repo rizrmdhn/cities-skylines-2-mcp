@@ -51,3 +51,12 @@ export function prettyJson(text: string) {
     return text
   }
 }
+
+/** "Nov 11, 09:00 – 09:12", or with the second date when the session ran past midnight. */
+export function formatTimeRange(startMs: number, endMs: number) {
+  const day = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+  const clock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+  if (startMs === endMs) return `${day(startMs)}, ${clock(startMs)}`
+  const sameDay = day(startMs) === day(endMs)
+  return `${day(startMs)}, ${clock(startMs)} – ${sameDay ? "" : `${day(endMs)}, `}${clock(endMs)}`
+}

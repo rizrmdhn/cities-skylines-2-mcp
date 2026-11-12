@@ -20,16 +20,16 @@ function mapLinkSearch(link: HTMLElement) {
 }
 
 describe("AI activity", () => {
-  it("lists every change newest first", async () => {
+  it("lists the changes of a session in the order they happened", async () => {
     renderApp("/activity")
     const list = await findTable()
     expect(list).toHaveLength(5)
-    expect(list[0]).toHaveTextContent("place")
-    expect(list[0]).toHaveTextContent("-¢48,000")
-    expect(list[0]).toHaveTextContent("Done")
+    expect(list[0]).toHaveTextContent("batch")
     expect(list[2]).toHaveTextContent("Failed 400")
-    expect(list[4]).toHaveTextContent("batch")
-    expect(screen.getByText(/Showing 5 of 5 changes/)).toBeInTheDocument()
+    expect(list[4]).toHaveTextContent("place")
+    expect(list[4]).toHaveTextContent("-¢48,000")
+    expect(list[4]).toHaveTextContent("Done")
+    expect(screen.getByText(/1 session, 5 changes since the save was loaded/)).toBeInTheDocument()
   })
 
   it("filters by result", async () => {
@@ -38,6 +38,7 @@ describe("AI activity", () => {
     await user.click(screen.getByRole("button", { name: "Failed" }))
     await waitFor(() => expect(rows()).toHaveLength(1))
     expect(rows()[0]).toHaveTextContent("zone")
+    expect(screen.getByText(/Showing 1 of 5 actions that match the filters/)).toBeInTheDocument()
     expect(router.state.location.search).toMatchObject({ status: "failed" })
   })
 
