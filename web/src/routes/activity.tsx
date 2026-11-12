@@ -86,7 +86,7 @@ function plural(n: number, word: string) {
 function SessionTimeline() {
   const { status, kind, entry: selectedId, session: focusKey } = Route.useSearch()
   const navigate = Route.useNavigate()
-  const { history, entries, sessions, city } = useActivity()
+  const { entries, sessions, city, archived, error, isPending } = useActivity()
   // Sessions the user opened or closed by hand; the others follow the default (newest, or the linked one).
   const [toggled, setToggled] = useState<Record<string, boolean>>({})
 
@@ -117,8 +117,8 @@ function SessionTimeline() {
       <CardHeader>
         <CardTitle>AI sessions</CardTitle>
         <CardDescription className="max-md:col-span-2">
-          {history.data
-            ? `Newest first. ${filtered ? `${shownSessions.length} of ${plural(all.length, "session")}` : plural(all.length, "session")}, ${plural(history.data.total, "change")} since the save was loaded. A pause of 15 minutes starts a new session.`
+          {entries
+            ? `Newest first. ${filtered ? `${shownSessions.length} of ${plural(all.length, "session")}` : plural(all.length, "session")}, ${plural(entries.length, "change")} ${archived ? "recorded by the companion, including earlier game runs" : "since the save was loaded"}. A pause of 15 minutes starts a new session.`
             : "Newest first"}
         </CardDescription>
         <CardAction className="flex flex-wrap items-center gap-2 max-md:col-start-1 max-md:row-span-1 max-md:row-start-3 max-md:mt-2 max-md:justify-self-start">
@@ -175,9 +175,9 @@ function SessionTimeline() {
         </CardAction>
       </CardHeader>
       <CardContent>
-        {history.isError ? (
-          <QueryError title="Could not load AI history" error={history.error} />
-        ) : !history.data ? (
+        {error ? (
+          <QueryError title="Could not load AI history" error={error} />
+        ) : isPending ? (
           <Skeleton className="h-64" />
         ) : shown.length === 0 ? (
           <Empty>
