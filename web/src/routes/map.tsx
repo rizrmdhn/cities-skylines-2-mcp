@@ -27,7 +27,10 @@ import { LAYER_LABELS } from "@/features/map/layers"
 import { MapCanvas } from "@/features/map/map-canvas"
 import { MapLegend } from "@/features/map/map-legend"
 import { OverlayCard } from "@/features/map/overlay-card"
+import { ReplayBar } from "@/features/map/replay-bar"
+import { ReplayOverlay } from "@/features/map/replay-overlay"
 import { SelectionPanel } from "@/features/map/selection-panel"
+import { useReplay } from "@/features/map/use-replay"
 import { useRoads } from "@/features/map/use-roads"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { useElementSize } from "@/hooks/use-element-size"
@@ -76,6 +79,8 @@ const mapSearch = z.object({
   sel: z.string().optional().catch(undefined),
   roads: z.boolean().default(true).catch(true),
   markers: z.boolean().default(true).catch(true),
+  replay: z.string().optional().catch(undefined),
+  step: z.number().int().min(1).optional().catch(undefined),
 })
 
 export const Route = createFileRoute("/map")({
@@ -171,9 +176,19 @@ function MapWorkspace() {
     seenHistoryTotal.current = historyTotal
   }, [historyTotal]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const replay = useReplay({
+    replay: search.replay,
+    step: search.step,
+    view,
+    onPan: (target) => {
+      if (search.follow) setSearch({ follow: false })
+      setView(target)
+    },
+  })
+  // A replay shows only its own session's markers.
   const markers = useMemo(
-    () => (search.markers && history.data ? historyMarkers(history.data.entries) : []),
-    [search.markers, history.data]
+    () => (search.markers && !replay.active && history.data ? historyMarkers(history.data.entries) : []),
+    [search.markers, replay.active, history.data]
   )
   const selection = useMemo(() => decodeSelection(search.sel), [search.sel])
 
@@ -204,6 +219,9 @@ function MapWorkspace() {
           onSelect={(next: Selection) => setSearch({ sel: encodeSelection(next) })}
           onHover={setHover}
         />
+        {replay.active && replay.session && (
+          <ReplayOverlay markers={replay.markers} current={replay.current} view={shownView} size={size} />
+        )}
 
         <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-wrap items-start gap-2 *:pointer-events-auto">
           <div className="flex items-center gap-1 rounded-lg border bg-background/90 p-1 shadow-sm backdrop-blur">
@@ -265,6 +283,16 @@ function MapWorkspace() {
             </ToggleGroup>
           </div>
 
+          {replay.active && (
+            <ReplayBar
+              session={replay.session}
+              loading={replay.loading}
+              sessionKey={search.replay!}
+              step={replay.current}
+              onStep={(step) => setSearch({ step })}
+              onExit={() => setSearch({ replay: undefined, step: undefined })}
+            />
+          )}
           {roadsTooWide && <Badge variant="secondary">Zoom in to see roads</Badge>}
           {!roadsTooWide && roads.fetching && <Badge variant="outline">Loading roads</Badge>}
           {!roadsTooWide && roads.truncated > 0 && (

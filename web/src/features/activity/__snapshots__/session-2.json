@@ -1,0 +1,224 @@
+{
+  "format": "cs2mcp-ai-sessions",
+  "version": 1,
+  "exportedAt": "2026-11-12T10:00:00.000Z",
+  "city": "Riverside",
+  "sessionRule": "A step is one request, or one batch with its parts. A session is a run of steps without a pause longer than 15 minutes; a game restart also starts a new session.",
+  "sessions": [
+    {
+      "key": "4-1794387605",
+      "number": 2,
+      "startUtc": "2026-11-11T09:00:05.000Z",
+      "endUtc": "2026-11-11T09:12:00.000Z",
+      "durationSeconds": 715,
+      "gameTimeStart": "2026-03-15 09:00",
+      "gameTimeEnd": "2026-03-15 11:00",
+      "stepCount": 4,
+      "entryCount": 7,
+      "succeeded": 3,
+      "failed": 1,
+      "spent": 83000,
+      "netMoney": -83000,
+      "running": false,
+      "actions": [
+        {
+          "name": "/build/road/connect",
+          "count": 3
+        },
+        {
+          "name": "/build/place",
+          "count": 2
+        },
+        {
+          "name": "/city/taxes/set",
+          "count": 1
+        }
+      ],
+      "prefabs": [
+        {
+          "name": "Small Road",
+          "count": 3
+        },
+        {
+          "name": "ElementarySchool01",
+          "count": 1
+        },
+        {
+          "name": "Park01",
+          "count": 1
+        }
+      ],
+      "place": {
+        "centre": {
+          "x": 300,
+          "z": -20
+        },
+        "min": {
+          "x": 0,
+          "z": -340
+        },
+        "max": {
+          "x": 600,
+          "z": 300
+        },
+        "steps": 3
+      },
+      "steps": [
+        {
+          "index": 1,
+          "kind": "single",
+          "path": "/build/place",
+          "ok": true,
+          "failedParts": 0,
+          "moneyDelta": -48000,
+          "startUtc": "2026-11-11T09:00:05.000Z",
+          "entry": {
+            "timeUtc": "2026-11-11T09:00:05Z",
+            "gameTime": "2026-03-15 09:00",
+            "query": {
+              "prefab": "ElementarySchool01",
+              "x": "120",
+              "z": "-340"
+            },
+            "status": 200,
+            "ok": true,
+            "batchChild": false,
+            "moneyDelta": -48000,
+            "result": "{\"placed\":true,\"building\":{\"index\":901,\"version\":1}}",
+            "id": 4,
+            "path": "/build/place"
+          },
+          "parts": []
+        },
+        {
+          "index": 2,
+          "kind": "batch",
+          "path": "/build/batch",
+          "ok": false,
+          "failedParts": 1,
+          "moneyDelta": -30000,
+          "startUtc": "2026-11-11T09:05:00.000Z",
+          "entry": {
+            "timeUtc": "2026-11-11T09:05:00Z",
+            "gameTime": "2026-03-15 10:00",
+            "query": null,
+            "status": 200,
+            "ok": true,
+            "batchChild": false,
+            "moneyDelta": -30000,
+            "result": "{\"ok\":false,\"total\":3,\"ran\":3,\"succeeded\":2,\"failed\":1}",
+            "id": 9,
+            "path": "/build/batch"
+          },
+          "parts": [
+            {
+              "timeUtc": "2026-11-11T09:05:01Z",
+              "gameTime": "2026-03-15 09:30",
+              "query": {
+                "prefab": "Small Road",
+                "x1": "0",
+                "z1": "300",
+                "x2": "200",
+                "z2": "300"
+              },
+              "status": 200,
+              "ok": true,
+              "batchChild": true,
+              "moneyDelta": -15000,
+              "result": null,
+              "id": 5,
+              "path": "/build/road/connect"
+            },
+            {
+              "timeUtc": "2026-11-11T09:05:10Z",
+              "gameTime": "2026-03-15 09:40",
+              "query": {
+                "prefab": "Small Road",
+                "x1": "200",
+                "z1": "300",
+                "x2": "400",
+                "z2": "300"
+              },
+              "status": 200,
+              "ok": true,
+              "batchChild": true,
+              "moneyDelta": -15000,
+              "result": null,
+              "id": 6,
+              "path": "/build/road/connect"
+            },
+            {
+              "timeUtc": "2026-11-11T09:05:20Z",
+              "gameTime": "2026-03-15 09:50",
+              "query": {
+                "prefab": "Small Road",
+                "x1": "400",
+                "z1": "300",
+                "x2": "600",
+                "z2": "300"
+              },
+              "status": 400,
+              "ok": false,
+              "batchChild": true,
+              "moneyDelta": 0,
+              "result": "{\"error\":\"segment overlaps a building\"}",
+              "id": 8,
+              "path": "/build/road/connect"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "kind": "single",
+          "path": "/city/taxes/set",
+          "ok": true,
+          "failedParts": 0,
+          "moneyDelta": 0,
+          "startUtc": "2026-11-11T09:05:15.000Z",
+          "entry": {
+            "timeUtc": "2026-11-11T09:05:15Z",
+            "gameTime": "2026-03-15 09:45",
+            "query": {
+              "area": "commercial",
+              "rate": "11"
+            },
+            "status": 200,
+            "ok": true,
+            "batchChild": false,
+            "moneyDelta": 0,
+            "result": null,
+            "id": 7,
+            "path": "/city/taxes/set"
+          },
+          "parts": []
+        },
+        {
+          "index": 4,
+          "kind": "single",
+          "path": "/build/place",
+          "ok": true,
+          "failedParts": 0,
+          "moneyDelta": -5000,
+          "startUtc": "2026-11-11T09:12:00.000Z",
+          "entry": {
+            "timeUtc": "2026-11-11T09:12:00Z",
+            "gameTime": "2026-03-15 11:00",
+            "query": {
+              "prefab": "Park01",
+              "x": "500",
+              "z": "100"
+            },
+            "status": 200,
+            "ok": true,
+            "batchChild": false,
+            "moneyDelta": -5000,
+            "result": "{\"placed\":true}",
+            "id": 10,
+            "path": "/build/place"
+          },
+          "parts": []
+        }
+      ]
+    }
+  ]
+}

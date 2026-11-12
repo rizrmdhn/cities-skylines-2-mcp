@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ArrowRightIcon } from "lucide-react"
 
@@ -13,22 +12,27 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ResultBadge } from "@/features/activity/result-badge"
-import { actionLabel, formatMoneyDelta, formatTime } from "@/lib/format"
-import { historyQuery } from "@/lib/queries"
+import { StepResult } from "@/features/activity/step-table"
+import { useActivity } from "@/features/activity/use-activity"
+import { actionLabel, formatMoney, formatMoneyDelta, formatTime } from "@/lib/format"
+import { stepEntryId } from "@/lib/step-text"
 
 const SHOWN = 5
 
 export function RecentActivityCard({ className }: { className?: string }) {
-  const history = useQuery(historyQuery())
-  const entries = history.data?.entries.slice(0, SHOWN) ?? []
+  const { history, sessions } = useActivity()
+  // The newest steps across sessions: a batch is one row, not one per part.
+  const steps = (sessions ?? []).flatMap((session) => session.steps.map((step) => ({ session, step })).reverse()).slice(0, SHOWN)
+  const latest = sessions?.[0]
 
   return (
     <Card className={className}>
       <CardHeader>
         <CardTitle>Latest AI changes</CardTitle>
         <CardDescription>
-          {history.data ? `${history.data.total} changes this session` : "Changes made through the bridge"}
+          {latest
+            ? `Session ${latest.number}: ${latest.steps.length} action${latest.steps.length === 1 ? "" : "s"}, ${formatMoney(latest.spent)} spent`
+            : "Changes made through the bridge"}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -36,28 +40,31 @@ export function RecentActivityCard({ className }: { className?: string }) {
           <QueryError title="Could not load AI history" error={history.error} />
         ) : !history.data ? (
           <Skeleton className="h-32" />
-        ) : entries.length === 0 ? (
+        ) : steps.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             The AI has not changed anything since the save was loaded.
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {entries.map((entry) => (
-              <li key={entry.id}>
+            {steps.map(({ session, step }) => (
+              <li key={`${session.key}-${step.index}`}>
                 <Link
                   to="/activity"
-                  search={{ entry: entry.id }}
+                  search={{ entry: stepEntryId(step) }}
                   className="flex items-center gap-2 rounded-md text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span className="min-w-0 flex-1 truncate capitalize">
-                    {actionLabel(entry.path)}
+                    {actionLabel(step.path)}
+                    {step.kind === "batch" && (
+                      <span className="text-muted-foreground normal-case"> · {step.parts.length} parts</span>
+                    )}
                   </span>
                   <span className="tabular-nums text-muted-foreground">
-                    {formatMoneyDelta(entry.moneyDelta)}
+                    {formatMoneyDelta(step.moneyDelta)}
                   </span>
-                  <ResultBadge entry={entry} />
+                  <StepResult step={step} running={session.running && step === session.steps.at(-1)} />
                   <span className="w-16 text-end text-xs tabular-nums text-muted-foreground">
-                    {formatTime(entry.timeUtc)}
+                    {formatTime(new Date(step.startMs).toISOString())}
                   </span>
                 </Link>
               </li>

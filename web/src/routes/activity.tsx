@@ -1,11 +1,12 @@
-import { useQuery } from "@tanstack/react-query"
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 import { HistoryIcon } from "lucide-react"
+import { useState } from "react"
+import { toast } from "sonner"
 import { z } from "zod"
 
 import { QueryError } from "@/components/query-error"
 import { WaitingForCity } from "@/components/waiting-for-city"
-import { Badge } from "@/components/ui/badge"
+import { Accordion } from "@/components/ui/accordion"
 import {
   Card,
   CardAction,
@@ -30,22 +31,16 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { EntrySheet } from "@/features/activity/entry-sheet"
-import { ResultBadge } from "@/features/activity/result-badge"
+import { ExportMenu } from "@/features/activity/export-menu"
+import { exportHistory, exportSession, type ExportFormat } from "@/features/activity/run-export"
+import { SessionCard } from "@/features/activity/session-card"
 import { SpendingCard } from "@/features/activity/spending-card"
-import type { HistoryEntry } from "@/lib/bridge-types"
+import { useActivity } from "@/features/activity/use-activity"
 import { useConnection } from "@/lib/connection"
-import { actionLabel, formatMoneyDelta, formatTime } from "@/lib/format"
-import { historyQuery } from "@/lib/queries"
+import { actionLabel } from "@/lib/format"
+import { sessionOfEntry, stepMatches, type Session, type Step } from "@/lib/sessions"
 
 const STATUS_FILTERS = ["all", "ok", "failed"] as const
 type StatusFilter = (typeof STATUS_FILTERS)[number]
@@ -59,6 +54,8 @@ const activitySearch = z.object({
   status: z.enum(STATUS_FILTERS).default("all").catch("all"),
   kind: z.string().optional().catch(undefined),
   entry: z.number().int().optional().catch(undefined),
+  /** A session's key: opened and scrolled to (the map replay links back with it). */
+  session: z.string().optional().catch(undefined),
 })
 
 export const Route = createFileRoute("/activity")({
@@ -66,47 +63,65 @@ export const Route = createFileRoute("/activity")({
   component: ActivityPage,
 })
 
-function matches(entry: HistoryEntry, status: StatusFilter, kind: string | undefined) {
-  if (status === "ok" && !entry.ok) return false
-  if (status === "failed" && entry.ok) return false
-  return kind === undefined || entry.path === kind
-}
-
 function ActivityPage() {
   const connection = useConnection()
   if (!connection.ready) return <WaitingForCity />
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4">
       <SpendingCard />
-      <ActivityTable />
+      <SessionTimeline />
     </div>
   )
 }
 
-function ActivityTable() {
-  const { status, kind, entry: selectedId } = Route.useSearch()
-  const navigate = Route.useNavigate()
-  const history = useQuery(historyQuery())
+interface Shown {
+  session: Session
+  steps: Step[]
+}
 
-  const entries = history.data?.entries ?? []
-  const kinds = [...new Set(entries.map((entry) => entry.path))].sort()
-  const visible = entries.filter((entry) => matches(entry, status, kind))
-  const selected = entries.find((entry) => entry.id === selectedId)
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`
+}
+
+function SessionTimeline() {
+  const { status, kind, entry: selectedId, session: focusKey } = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const { entries, sessions, city, archived, error, isPending } = useActivity()
+  // Sessions the user opened or closed by hand; the others follow the default (newest, or the linked one).
+  const [toggled, setToggled] = useState<Record<string, boolean>>({})
+
+  const all = sessions ?? []
+  const kinds = [...new Set((entries ?? []).map((entry) => entry.path))].sort()
   const kindItems = [
     { value: ALL_KINDS, label: "All actions" },
     ...kinds.map((path) => ({ value: path, label: actionLabel(path) })),
   ]
+  // A session is listed when one of its steps matches; it then lists the matching steps.
+  const shown: Shown[] = all
+    .map((session) => ({ session, steps: session.steps.filter((step) => stepMatches(step, status, kind)) }))
+    .filter(({ steps }) => steps.length > 0)
+  const shownSessions = shown.map(({ session }) => session)
+  const selected = entries?.find((entry) => entry.id === selectedId)
+  const selectedSessionKey = sessionOfEntry(all, selectedId)?.key
+  const latestKey = all[0]?.key
+
+  const isOpen = (key: string) => toggled[key] ?? key === (focusKey ?? selectedSessionKey ?? latestKey)
+  const openKeys = shown.filter(({ session }) => isOpen(session.key)).map(({ session }) => session.key)
+
+  const done = (name: string) => toast.success(`Download started: ${name}`)
+  const filtered = status !== "all" || kind !== undefined
+  const actionCount = shownSessions.reduce((sum, session) => sum + session.steps.length, 0)
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Changes made through the bridge</CardTitle>
-        <CardDescription>
-          {history.data
-            ? `Newest first. Showing ${visible.length} of ${history.data.total} changes since the save was loaded.`
+        <CardTitle>AI sessions</CardTitle>
+        <CardDescription className="max-md:col-span-2">
+          {entries
+            ? `Newest first. ${filtered ? `${shownSessions.length} of ${plural(all.length, "session")}` : plural(all.length, "session")}, ${plural(entries.length, "change")} ${archived ? "recorded by the companion, including earlier game runs" : "since the save was loaded"}. A pause of 15 minutes starts a new session.`
             : "Newest first"}
         </CardDescription>
-        <CardAction className="flex flex-wrap items-center gap-2">
+        <CardAction className="flex flex-wrap items-center gap-2 max-md:col-start-1 max-md:row-span-1 max-md:row-start-3 max-md:mt-2 max-md:justify-self-start">
           <ToggleGroup
             variant="outline"
             size="sm"
@@ -148,77 +163,58 @@ function ActivityTable() {
               </SelectGroup>
             </SelectContent>
           </Select>
+          {shownSessions.length > 0 && (
+            <ExportMenu
+              what={`${plural(shownSessions.length, "session")}, ${plural(actionCount, "action")}`}
+              label="Export all"
+              onExport={(format: ExportFormat) =>
+                done(exportHistory(shownSessions, format, { city, filters: { status, kind } }))
+              }
+            />
+          )}
         </CardAction>
       </CardHeader>
       <CardContent>
-        {history.isError ? (
-          <QueryError title="Could not load AI history" error={history.error} />
-        ) : !history.data ? (
+        {error ? (
+          <QueryError title="Could not load AI history" error={error} />
+        ) : isPending ? (
           <Skeleton className="h-64" />
-        ) : visible.length === 0 ? (
+        ) : shown.length === 0 ? (
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <HistoryIcon />
               </EmptyMedia>
-              <EmptyTitle>{entries.length === 0 ? "No changes yet" : "Nothing matches"}</EmptyTitle>
+              <EmptyTitle>{all.length === 0 ? "No changes yet" : "Nothing matches"}</EmptyTitle>
               <EmptyDescription>
-                {entries.length === 0
-                  ? "Every build, demolish, zoning or setting change the AI makes appears here."
+                {all.length === 0
+                  ? "Every build, demolish, zoning or setting change the AI makes appears here, grouped into sessions."
                   : "No change matches these filters."}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Action</TableHead>
-                <TableHead>Result</TableHead>
-                <TableHead className="text-end">Money</TableHead>
-                <TableHead className="max-sm:hidden">In game</TableHead>
-                <TableHead className="text-end">Time</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((entry) => (
-                <TableRow
-                  key={entry.id}
-                  data-state={entry.id === selectedId ? "selected" : undefined}
-                  className="cursor-pointer"
-                  onClick={() =>
-                    navigate({ search: (prev) => ({ ...prev, entry: entry.id }) })
-                  }
-                >
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Link
-                        to="/activity"
-                        search={(prev) => ({ ...prev, entry: entry.id })}
-                        className="capitalize outline-none hover:underline focus-visible:underline"
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        {actionLabel(entry.path)}
-                      </Link>
-                      {entry.batchChild && <Badge variant="outline">batch</Badge>}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <ResultBadge entry={entry} />
-                  </TableCell>
-                  <TableCell className="text-end tabular-nums">
-                    {formatMoneyDelta(entry.moneyDelta)}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums max-sm:hidden">
-                    {entry.gameTime ?? "-"}
-                  </TableCell>
-                  <TableCell className="text-end text-muted-foreground tabular-nums">
-                    {formatTime(entry.timeUtc)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <Accordion
+            multiple
+            value={openKeys}
+            onValueChange={(next: unknown[]) => {
+              const keys = new Set(next.map(String))
+              setToggled(Object.fromEntries(shown.map(({ session }) => [session.key, keys.has(session.key)])))
+            }}
+          >
+            {shown.map(({ session, steps }) => (
+              <SessionCard
+                key={session.key}
+                session={session}
+                steps={steps}
+                stepsTotal={session.steps.length}
+                isLatest={session.key === latestKey}
+                focused={session.key === focusKey}
+                selectedId={selectedId}
+                onExport={(format) => done(exportSession(session, format, { city }))}
+              />
+            ))}
+          </Accordion>
         )}
       </CardContent>
       <EntrySheet
