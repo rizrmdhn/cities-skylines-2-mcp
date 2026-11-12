@@ -11,6 +11,8 @@
  *   - the header's speed buttons: a real click reaches the stub as POST /sim/control (token, validated
  *     parameters, the app's own Origin) and the UI shows the new speed; invalid control calls and
  *     other POSTs are refused before the bridge
+ *   - the trend recorder saved samples from the stub, /api/desktop/trends/series reads them back, and
+ *     the Trends page (opened through the nav link) draws them as SVG lines
  *   - navigating away from app://cs2mcp is blocked
  * then closes the app and checks it quit cleanly. Afterwards smoke-settings.mjs runs a second app to
  * drive the settings page (change the bridge URL to another stub, set a token, look for leaks).
@@ -121,6 +123,8 @@ function check(name, ok, detail = "") {
 const stub = await startStubBridge()
 const debugPort = await freePort()
 const userData = mkdtempSync(join(tmpdir(), "cs2mcp-smoke-"))
+// Sample every 10 s (the smallest allowed interval) so the run sees several samples.
+writeFileSync(join(userData, "settings.json"), JSON.stringify({ version: 1, values: { "trends.intervalSeconds": 10 } }))
 const env = {
   ...process.env,
   CS2_BRIDGE_URL: stub.url,
@@ -276,6 +280,43 @@ try {
     refusedCalls.join() === "400,400,400,405,405" && stub.requests.length === beforeRefused,
     refusedCalls.join()
   )
+
+  // The trend recorder runs in the main process whether or not the Trends page is open.
+  const recorded = await waitFor(
+    "the recorder to save two samples",
+    async () => {
+      const status = await cdp.evaluate(`fetch("/api/desktop/trends").then((r) => r.json())`)
+      return status.sessionSamples >= 2 ? status : null
+    },
+    60_000
+  )
+  check(
+    "the trend recorder saved samples from the stub",
+    recorded.city?.name === CITY_NAME && recorded.bytes > 0,
+    `${recorded.state}, ${recorded.sessionSamples} samples, ${recorded.bytes} bytes`
+  )
+  const trendSeries = await cdp.evaluate(
+    `fetch("/api/desktop/trends/series?points=0&city=" + encodeURIComponent(${JSON.stringify(recorded.city?.key ?? "")})).then((r) => r.json())`
+  )
+  const populations = (trendSeries.points ?? []).map((p) => p.population)
+  check(
+    "GET /api/desktop/trends/series returns the samples in game-time order with changing values",
+    populations.length >= 2 &&
+      populations.every((value) => typeof value === "number") &&
+      trendSeries.points.every((p, i, all) => i === 0 || p.x > all[i - 1].x) &&
+      populations.at(-1) > populations[0],
+    populations.join(", ")
+  )
+  await cdp.evaluate(`document.querySelector('nav a[href="/trends"]').click()`)
+  const drawn = await waitFor("the Trends page to draw the population line", async () => {
+    const lines = await cdp.evaluate(`(() => {
+        const path = document.querySelector('[data-series="population"] path[fill="none"]')
+        return path ? { d: path.getAttribute("d"), charts: document.querySelectorAll('[data-testid="trend-chart"]').length } : null
+      })()`)
+    return lines && lines.d.includes("L") ? lines : null
+  })
+  check("the Trends page draws the recorded series as SVG lines", drawn.charts >= 1, `${drawn.charts} charts`)
+  await cdp.evaluate(`document.querySelector('nav a[href="/"]').click()`)
 
   const opened = await cdp.evaluate(`window.open("about:blank") === null`)
   check("window.open is denied", opened === true)

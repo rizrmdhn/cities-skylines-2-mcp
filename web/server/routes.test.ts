@@ -62,6 +62,14 @@ describe("route allowlists", () => {
     ).toThrow("changes game state")
   })
 
+  it("lets the trend recorder read /city/budget, a read-only route, and nothing mutating next to it", () => {
+    expect(findAllowedRoute("/api/city/budget")).toMatchObject({ path: "/city/budget", params: [] })
+    expect(isMutatingBridgePath("/city/budget")).toBe(false)
+    expect(findControlRoute("/api/city/budget")).toBeUndefined()
+    // the setter of a neighbouring read route stays out
+    expect(findAllowedRoute("/api/city/taxes/set")).toBeUndefined()
+  })
+
   it("accepts the real allowlists", () => {
     expect(() => assertRouteInvariants(ALLOWED_ROUTES, CONTROL_ROUTES, CONTROL_ROUTE_PATHS)).not.toThrow()
   })

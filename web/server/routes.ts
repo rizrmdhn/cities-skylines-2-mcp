@@ -21,6 +21,7 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   { path: "/state", params: [], timeoutMs: 10_000 },
   { path: "/city/overview", params: [], timeoutMs: 10_000 },
   { path: "/city/demand", params: [], timeoutMs: 10_000 },
+  { path: "/city/budget", params: [], timeoutMs: 10_000 },
   { path: "/city/services", params: [], timeoutMs: 10_000 },
   { path: "/city/coverage", params: ["service", "gaps"], timeoutMs: 20_000 },
   { path: "/city/traffic", params: ["limit"], timeoutMs: 20_000 },
