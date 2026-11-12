@@ -285,3 +285,107 @@ export const roadNetwork: RoadNetworkPayload = {
   ],
   junctions: [[400, 300, 1]],
 }
+
+/**
+ * A log with two AI sessions (more than 15 minutes apart), newest first like the bridge. The
+ * second holds a batch of three road pieces (one failed) with a tax change interleaved, logged
+ * the way the bridge logs it: the parts first, then the batch request, which started before them.
+ */
+export const sessionEntries: HistoryEntry[] = [
+  entry({
+    id: 10,
+    path: "/build/place",
+    timeUtc: "2026-11-11T09:12:00Z",
+    gameTime: "2026-03-15 11:00",
+    query: { prefab: "Park01", x: "500", z: "100" },
+    moneyDelta: -5000,
+    result: '{"placed":true}',
+  }),
+  entry({
+    id: 9,
+    path: "/build/batch",
+    timeUtc: "2026-11-11T09:05:00Z",
+    gameTime: "2026-03-15 10:00",
+    moneyDelta: -30000,
+    result: '{"ok":false,"total":3,"ran":3,"succeeded":2,"failed":1}',
+  }),
+  entry({
+    id: 8,
+    path: "/build/road/connect",
+    timeUtc: "2026-11-11T09:05:20Z",
+    gameTime: "2026-03-15 09:50",
+    query: { prefab: "Small Road", x1: "400", z1: "300", x2: "600", z2: "300" },
+    batchChild: true,
+    ok: false,
+    status: 400,
+    result: '{"error":"segment overlaps a building"}',
+  }),
+  entry({
+    id: 7,
+    path: "/city/taxes/set",
+    timeUtc: "2026-11-11T09:05:15Z",
+    gameTime: "2026-03-15 09:45",
+    query: { area: "commercial", rate: "11" },
+  }),
+  entry({
+    id: 6,
+    path: "/build/road/connect",
+    timeUtc: "2026-11-11T09:05:10Z",
+    gameTime: "2026-03-15 09:40",
+    query: { prefab: "Small Road", x1: "200", z1: "300", x2: "400", z2: "300" },
+    batchChild: true,
+    moneyDelta: -15000,
+  }),
+  entry({
+    id: 5,
+    path: "/build/road/connect",
+    timeUtc: "2026-11-11T09:05:01Z",
+    gameTime: "2026-03-15 09:30",
+    query: { prefab: "Small Road", x1: "0", z1: "300", x2: "200", z2: "300" },
+    batchChild: true,
+    moneyDelta: -15000,
+  }),
+  entry({
+    id: 4,
+    path: "/build/place",
+    timeUtc: "2026-11-11T09:00:05Z",
+    gameTime: "2026-03-15 09:00",
+    query: { prefab: "ElementarySchool01", x: "120", z: "-340" },
+    moneyDelta: -48000,
+    result: '{"placed":true,"building":{"index":901,"version":1}}',
+  }),
+  entry({
+    id: 3,
+    path: "/build/zone",
+    timeUtc: "2026-11-11T08:02:00Z",
+    gameTime: "2026-03-14 12:00",
+    query: { cx: "1000", cz: "2000", zone: "Residential" },
+    ok: false,
+    status: 400,
+    result: '{"error":"area is not zonable"}',
+  }),
+  entry({
+    id: 2,
+    path: "/build/road",
+    timeUtc: "2026-11-11T08:01:10Z",
+    gameTime: "2026-03-14 10:00",
+    query: { prefab: "Small Road", x1: "-400", z1: "0", x2: "0", z2: "0" },
+    moneyDelta: -12000,
+  }),
+  entry({
+    id: 1,
+    path: "/city/taxes/set",
+    timeUtc: "2026-11-11T08:00:00Z",
+    gameTime: "2026-03-14 08:00",
+    query: { area: "residential", rate: "12" },
+  }),
+]
+
+export const sessionHistory: History = {
+  ...history,
+  sessionSpent: 95000,
+  spendingLimitRemaining: 5000,
+  total: sessionEntries.length,
+  returned: sessionEntries.length,
+  entries: sessionEntries,
+}
