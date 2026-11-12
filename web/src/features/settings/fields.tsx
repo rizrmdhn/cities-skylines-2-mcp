@@ -78,7 +78,9 @@ function RowText({
   return (
     <FieldContent>
       <div className="flex flex-wrap items-center gap-x-2">
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <FieldLabel id={`${id}-label`} htmlFor={id}>
+          {label}
+        </FieldLabel>
         <SaveIndicator status={status} />
       </div>
       {description && <FieldDescription id={`${id}-description`}>{description}</FieldDescription>}
@@ -365,6 +367,7 @@ export function HotkeyRow({ setting, label, description, disabled }: RowProps<st
           variant="outline"
           className="min-w-36 justify-start"
           aria-pressed={recording}
+          aria-labelledby={`${id}-label ${id}-value`}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy(id, description, error)}
           disabled={unavailable}
@@ -377,16 +380,15 @@ export function HotkeyRow({ setting, label, description, disabled }: RowProps<st
           onKeyDown={onKeyDown}
         >
           <KeyboardIcon data-icon="inline-start" />
-          {recording ? (
-            "Press a shortcut…"
-          ) : setting.value ? (
-            <>
-              <span className="sr-only">Change shortcut, now </span>
+          <span id={`${id}-value`} className="contents">
+            {recording ? (
+              "Press a shortcut…"
+            ) : setting.value ? (
               <Hotkey accelerator={setting.value} />
-            </>
-          ) : (
-            "Record shortcut"
-          )}
+            ) : (
+              "Record shortcut"
+            )}
+          </span>
         </Button>
         {setting.value && !recording && (
           <Button
