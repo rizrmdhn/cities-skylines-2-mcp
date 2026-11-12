@@ -20,7 +20,7 @@ Inside `desktop/`:
 | script | does |
 | --- | --- |
 | `npm run dev` | builds `web/`, builds the desktop app, launches it (no HMR; restart to see changes; `node scripts/build.mjs --watch` rebuilds the main process on save) |
-| `npm run build` | `scripts/build.mjs`: bundles `src/main.ts` to `dist/main.cjs` with esbuild, copies `web/dist` to `dist/renderer` and `assets/` to `dist/assets`. Needs `web/dist` (build the web app first). |
+| `npm run build` | `scripts/build.mjs`: bundles `src/main.ts` to `dist/main.cjs` with esbuild, copies `web/dist` to `dist/renderer` and `assets/` to `dist/assets`, and bundles the MCP server to `dist/mcp-server/bin/index.mjs`. Needs `web/dist` and `mcp-server/node_modules` (run `npm run setup` at the repo root first). |
 | `npm start` | `electron .` |
 | `npm test` / `npm run typecheck` | vitest (Node, no Electron) / `tsc` |
 | `npm run smoke` | build + `scripts/smoke.mjs` |
@@ -43,6 +43,43 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 - **One implementation** of the bridge allowlist and of static-file lookup: `web/server/proxy.ts` and `web/server/static-files.ts` are transport-agnostic (plain data in/out). The browser companion's HTTP server and the Vite dev server use them through `web/server/handler.ts` / `static.ts`; the desktop app imports the same source files (bundled by esbuild).
 - `web/src/lib/api.ts` builds URLs from `window.location.origin`, so on `app://cs2mcp` the React app calls the main process with no change.
 - At runtime the app reads only `dist/` (`main.cjs`, `renderer/`, `assets/`), resolved from `__dirname`. The repo's `.env` files are read only when `app.isPackaged` is false. All npm packages are `devDependencies` because esbuild bundles them; keep it that way (a native module would have to be a `dependency` and left `external`).
+
+## First-run setup and bundled MCP server
+
+The desktop shell includes a guided setup page at `/setup`. On first launch, `setup.completed` defaults to `false` and the app opens this page instead of the dashboard. Settings → Setup → **Run setup again** resets that flag and opens the wizard. You can skip the wizard; completing it sets `setup.completed` to `true`.
+
+The build bundles `mcp-server/src/index.ts` and its runtime dependencies into one ESM file at `desktop/dist/mcp-server/bin/index.mjs`; it also writes the server's `package.json` beside it. Client configs run the companion's Electron executable in Node mode, so the player does not need a separate Node.js installation. A launch entry has this shape:
+
+```text
+command: "<Electron executable>"
+args: ["<absolute path to mcp-server/bin/index.mjs>"]
+env: { "ELECTRON_RUN_AS_NODE": "1" }
+```
+
+In development, the executable is `desktop/node_modules/electron/dist/electron.exe` and the server path is `desktop/dist/mcp-server/bin/index.mjs` (the wizard resolves absolute paths). In the packaged Windows app, the executable is typically `%LOCALAPPDATA%\Programs\CS2MCP Companion\CS2MCP Companion.exe`. With electron-builder's default `app.asar` layout and `asarUnpack`, the server path is `%LOCALAPPDATA%\Programs\CS2MCP Companion\resources\app.asar.unpacked\dist\mcp-server\bin\index.mjs`. Paths containing spaces remain separate JSON string values in `command` and `args`.
+
+The server runs in a separate process, which cannot read from inside `app.asar`. Packaging must therefore put the entire `dist/mcp-server/**` directory on disk. Configure either `asarUnpack: ["dist/mcp-server/**"]` (preserves the `app.asar.unpacked/dist/mcp-server/...` path) or `extraResources: [{ from: "dist/mcp-server", to: "mcp-server" }]` (places it under `resources/mcp-server/...`). Include both `bin/index.mjs` and the adjacent `package.json`. The setup feature searches those two locations. The usual app payload still needs `dist/**` and `package.json` with `main: dist/main.cjs`.
+
+### Client configuration and settings
+
+The registered server name is `cs2`, matching `scripts/mcp-register.mjs`. Claude Desktop, Cursor and VS Code configs get a `cs2` stdio entry. Claude Code is configured through its CLI; the wizard generates a copyable `claude mcp add --env ELECTRON_RUN_AS_NODE=1 --transport stdio --scope user cs2 -- "<Electron executable>" "<server path>"` command with the current absolute paths. To remove it from Claude Code, run `claude mcp remove cs2 --scope user`.
+
+The wizard detects and uses these Windows defaults:
+
+| Client | Config location | Behavior |
+| --- | --- | --- |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json`; for a detected Microsoft Store install, `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json` | JSON registration; backs up and atomically updates only `mcpServers.cs2`. |
+| Claude Code | `%USERPROFILE%\.claude.json` (or `%CLAUDE_CONFIG_DIR%\.claude.json`) | Detected for status; offers CLI commands instead of editing the file. |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json` | JSON registration under `mcpServers.cs2` with `type: "stdio"`. |
+| VS Code, default profile | `%APPDATA%\Code\User\mcp.json` | Copyable snippet under `servers.cs2` with `type: "stdio"`; other profiles and workspace files are not edited. |
+
+The locations follow the clients' documented defaults: [Claude Desktop local MCP servers](https://modelcontextprotocol.io/docs/develop/connect-local-servers), [Claude Code MCP](https://code.claude.com/docs/en/mcp), [Cursor MCP](https://docs.cursor.com/context/mcp), and [VS Code MCP](https://code.visualstudio.com/docs/copilot/customization/mcp-servers). Claude Desktop's Store package location is detected as an additional Windows install location. Registration backs up an existing config beside itself, refuses invalid JSON, and writes atomically. It edits only our server entry and preserves unrelated entries and formatting where possible. Restart the client fully after registering. For clients the app does not edit, the wizard offers a masked snippet and a copy action.
+
+The companion's existing settings are `bridgeUrl` and secret `token`; setup adds the boolean `setup.completed`. The wizard inserts the effective `CS2_BRIDGE_URL` and `CS2MCP_TOKEN` into a client's `env` only after the player explicitly confirms sharing. The default bridge URL (`http://127.0.0.1:8642`) is omitted unless customized. A shared token is written as plain text in that AI client's config file; the wizard explains this before writing. Without sharing, the MCP server uses its defaults and any environment inherited from that client.
+
+Token generation saves a 256-bit random URL-safe token in the companion's secret setting. The game mod also needs the same `CS2MCP_TOKEN`; on Windows the wizard can set it as a user environment variable after explicit confirmation, or copy `setx CS2MCP_TOKEN "<token>"` for the player to run. Steam or the Paradox launcher must be fully quit and reopened so the game inherits the new value. The companion only writes a client config or changes this user environment variable after the corresponding explicit action.
+
+Setup routes are registered by the `setup` desktop feature under `/api/desktop/setup`: `GET` reports bridge/mod status, server location, token state and detected clients; `POST` routes `register`, `unregister`, `snippet`, `token/generate`, `token/copy`, `game-token`, `complete`, and `reset` implement the explicit actions above. The bridge check only reads `/ping` and `/state`.
 
 | file | role | loads Electron? |
 | --- | --- | --- |
@@ -542,7 +579,7 @@ Behaviour you get for free: optimistic update with rollback of just that key whe
 - **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable (`ctx.bridge.get` is GET only; `ctx.bridge.control` sends a control POST through the same allowlist, for explicit user actions only). Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core. Done for notifications, see "Notifications".
 - **Start with Windows / hidden start**: `app.setLoginItemSettings({ openAtLogin, args: ["--hidden"] })`; with `--hidden` the main window is not created (`ctx.launch.hidden`), so pair it with the tray. In dev, the login item would start bare `electron.exe`: only enable it when `ctx.isPackaged`. Define the boolean setting `startup.openAtLogin` and the tray menu shows a "Start with Windows" checkbox for it.
 - **Settings page**: exists (see "The settings page and adding a settings section"); give your feature a section there instead of a page of your own.
-- **Packaging / auto-update**: package `dist/**` and `package.json` (`main` is `dist/main.cjs`); icon `assets/icon.ico`; app id `com.cs2mcp.companion`, product name from `productName`. Nothing else is needed at runtime. Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
+- **Packaging / auto-update**: package `dist/**` and `package.json` (`main` is `dist/main.cjs`); icon `assets/icon.ico`; app id `com.cs2mcp.companion`, product name from `productName`. Also package `dist/mcp-server/**` outside `app.asar` using `asarUnpack: ["dist/mcp-server/**"]` or `extraResources` so MCP clients can launch the bundled server; include the adjacent `package.json`. Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
 
 ## Testing
 
