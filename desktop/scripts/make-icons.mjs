@@ -4,6 +4,9 @@
  * tile, yellow towers, green ground line) and writes:
  *   assets/icon.ico  16-256 px (window, taskbar, installer)
  *   assets/icon.png  512 px    (other platforms, packaging)
+ *   assets/tray-<connected|no-city|offline>[@1.5x|@2x].png  16/24/32 px tray icons: the same
+ *                    design with a status dot in the corner (green / amber / red + greyed out).
+ *                    Electron loads the @ variants by itself for the display scale.
  * Pure JS (same rasteriser as scripts/web-shortcut.mjs). The output is committed; rerun with
  * `npm run icons` only when the favicon changes.
  */
@@ -21,6 +24,24 @@ const TOWER_SEGMENTS = [
 ]
 const GROUND_SEGMENT = [5, 25, 27, 25]
 
+// Tray status variants: a dot in the bottom-right corner, ringed in the tile colour.
+const STATUS_DOT = { cx: 24.5, cy: 24.5, radius: 6.2, ring: 8 }
+const TRAY_VARIANTS = {
+  connected: { dot: [0x22, 0xc5, 0x5e], grey: false },
+  "no-city": { dot: [0xf5, 0x9e, 0x0b], grey: false },
+  offline: { dot: [0xef, 0x44, 0x44], grey: true },
+}
+const TRAY_SIZES = [
+  [16, ""],
+  [24, "@1.5x"],
+  [32, "@2x"],
+]
+
+function grey([r, g, b]) {
+  const y = Math.round(0.3 * r + 0.59 * g + 0.11 * b)
+  return [y, y, y]
+}
+
 function distanceToSegment(px, py, [x1, y1, x2, y2]) {
   const dx = x2 - x1
   const dy = y2 - y1
@@ -36,15 +57,24 @@ function insideTile(x, y) {
 }
 
 /** Colour of one point of the 32 x 32 design, or null outside the tile. */
-function sample(x, y) {
+function sample(x, y, variant) {
   if (!insideTile(x, y)) return null
-  if (distanceToSegment(x, y, GROUND_SEGMENT) <= 1) return GROUND
-  if (TOWER_SEGMENTS.some((segment) => distanceToSegment(x, y, segment) <= 1)) return TOWERS
-  return TILE
+  if (variant) {
+    const d = Math.hypot(x - STATUS_DOT.cx, y - STATUS_DOT.cy)
+    if (d <= STATUS_DOT.radius) return variant.dot
+    if (d <= STATUS_DOT.ring) return TILE
+  }
+  const colour =
+    distanceToSegment(x, y, GROUND_SEGMENT) <= 1
+      ? GROUND
+      : TOWER_SEGMENTS.some((segment) => distanceToSegment(x, y, segment) <= 1)
+        ? TOWERS
+        : TILE
+  return variant?.grey ? grey(colour) : colour
 }
 
 /** RGBA pixels, rows top-down, 4 x 4 supersampled. */
-function rasterise(size) {
+function rasterise(size, variant) {
   const pixels = Buffer.alloc(size * size * 4)
   const n = 4
   for (let row = 0; row < size; row++) {
@@ -52,7 +82,7 @@ function rasterise(size) {
       let r = 0, g = 0, b = 0, a = 0
       for (let sy = 0; sy < n; sy++) {
         for (let sx = 0; sx < n; sx++) {
-          const colour = sample(((col + (sx + 0.5) / n) * 32) / size, ((row + (sy + 0.5) / n) * 32) / size)
+          const colour = sample(((col + (sx + 0.5) / n) * 32) / size, ((row + (sy + 0.5) / n) * 32) / size, variant)
           if (!colour) continue
           r += colour[0]; g += colour[1]; b += colour[2]; a += 1
         }
@@ -78,8 +108,8 @@ function pngChunk(type, data) {
   return Buffer.concat([length, body, crc])
 }
 
-function png(size) {
-  const rgba = rasterise(size)
+function png(size, variant) {
+  const rgba = rasterise(size, variant)
   const header = Buffer.alloc(13)
   header.writeUInt32BE(size, 0)
   header.writeUInt32BE(size, 4)
@@ -146,4 +176,9 @@ const assets = new URL("../assets/", import.meta.url)
 mkdirSync(assets, { recursive: true })
 writeFileSync(new URL("icon.ico", assets), ico([16, 20, 24, 32, 40, 48, 64, 128, 256]))
 writeFileSync(new URL("icon.png", assets), png(512))
-console.log("wrote assets/icon.ico and assets/icon.png")
+for (const [name, variant] of Object.entries(TRAY_VARIANTS)) {
+  for (const [size, suffix] of TRAY_SIZES) {
+    writeFileSync(new URL(`tray-${name}${suffix}.png`, assets), png(size, variant))
+  }
+}
+console.log("wrote assets/icon.ico, assets/icon.png and assets/tray-*.png")
