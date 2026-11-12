@@ -60,6 +60,7 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 | `src/testing.ts` | `createTestContext()` for Node tests | no |
 | `src/features/index.ts` | **the registration list** | — |
 | `src/features/settings-api.ts` | built-in feature: `GET/POST /api/desktop/settings` | no |
+| `src/features/app-folders.ts` | built-in feature: opens the log / settings folder (settings page, About) | lazily, only when opening |
 
 Modules marked "no" must stay importable in plain Node: tests load them. Import Electron only with `import type` there.
 
@@ -103,6 +104,11 @@ The renderer calls `fetch("/api/desktop/<name>")` — GET for reads, POST with a
 | `GET /api/desktop/info` | `{ "desktop": true, "version": "0.11.0", "platform": "win32", "packaged": false, "features": ["settings-api"] }` — `features` lists the ids of features that started |
 | `GET /api/desktop/settings` | every exposed setting, secrets as `<key>Set`: `{ "bridgeUrl": null, "tokenSet": false, "effective": { "bridgeUrl": "http://127.0.0.1:8642", "bridgeUrlSource": "default", "tokenSet": false, "tokenSource": "default" }, "secretsEncrypted": true, "<feature>.<key>": … }` (`*Source` is `env` / `settings` / `dotenv` / `default`) |
 | `POST /api/desktop/settings` | body: partial `{ "<key>": value }`. Each key is validated by its schema; unknown or unexposed keys are refused; all-or-nothing. `""` or `null` clears `bridgeUrl`/`token`. Answers like the GET. |
+
+| `GET /api/desktop/app-folders` | `{ "logs": "<path>", "settings": "<path>" }`, the fixed folders (feature `app-folders`) |
+| `POST /api/desktop/app-folders/open-logs`, `.../open-settings` | opens that folder in the file manager; takes no path (the body is ignored); 500 with the shell's message when it cannot |
+
+A refused `POST /api/desktop/settings` also carries `issues`, one entry per rejected key, so a page can put each message next to its field: `{ "error": "bridgeUrl: must be an http:// or https:// URL", "status": 400, "kind": "companion", "issues": [{ "key": "bridgeUrl", "message": "must be an http:// or https:// URL" }] }` (`key: null` when the body as a whole is wrong; `ApiError.body` holds it on the web side).
 
 The bridge proxy on `/api/<bridge route>` is unchanged: GET only, the allowlist in `web/server/routes.ts`.
 
@@ -302,6 +308,106 @@ class BridgeError extends Error { status: number; kind: "unreachable" | "bridge"
 
 Settings store details: JSON at `<userData>/settings.json` (`{ "version": 1, "values": { … } }`), written atomically (temp file + rename, writes serialized), a corrupt file is moved aside as `settings.json.corrupt-<time>` and defaults are used, stored values that fail their schema fall back to the default, keys nobody defines are preserved. `set()` applies in memory and notifies listeners synchronously, then persists (await it to know it hit the disk). `secret: true` values (schema must yield `string | null`) are encrypted with Electron `safeStorage` (async API) and appear to the renderer only as `<key>Set: boolean`; without an OS keystore they are stored as plain text and `secretsEncrypted` is false. `expose: false` keeps a key out of the settings routes. To type `store.get("<id>.<key>")` add `declare module "../settings.ts" { interface SettingValues { "<id>.<key>": T } }` in your feature; the handle from `define()` is already typed. Core keys: `bridgeUrl`, `token` (secret), `window.main` (not exposed).
 
+## The settings page and adding a settings section
+
+`/settings` (web: `src/routes/settings.tsx`, `src/features/settings/`) exists only in the desktop app: the header shows its nav item only when `useDesktop().isDesktop`, and in the browser companion the route shows a short "available in the desktop app" empty state without asking for any settings. It stacks cards in this order: **Connection** (bridge URL and write-only token, explicit Save, "Test connection" through the proxy, env-wins explanation, "Reset to default"), **Appearance** (theme), the **sections of the desktop features** (below), **About** (versions, platform, packaged or dev, active features, "Open log folder" / "Open settings folder" via the `app-folders` feature, which opens fixed paths only). Saving the bridge URL or token takes effect at once: the app drops every cached bridge answer (`resetBridgeQueries`) and runs the connection test.
+
+### Adding a settings section
+
+A feature that has settings adds **one file** `web/src/features/settings/sections/<id>.tsx` and **one line** in `web/src/features/settings/sections/index.ts` (alphabetical, export name = camelCase id). The page renders the section only when `GET /api/desktop/info` lists `<id>` in `features` (so a feature that failed to start shows nothing). Toggles, selects and typed-in values save **immediately** (no Save button); the keys are the namespaced settings the feature defined with `ctx.settings.define("<id>.<name>", …)` in the main process.
+
+**1. Main process** (`src/features/city-watch.ts`, next to `city-watch.intervalSeconds` above): define the keys the section edits. The schema is the single source of truth: a refused value comes back as a 400 whose message is shown next to the field.
+
+```ts
+ctx.settings.define("city-watch.enabled", { schema: z.boolean(), default: true })
+```
+
+**2. The section** `web/src/features/settings/sections/city-watch.tsx` (verbatim in `web/src/test/city-watch-section.example.tsx`, which `tsc` checks against the real API; `desktop/test/settings-section-readme.test.ts` keeps this README in step with it):
+
+```tsx
+import { EyeIcon } from "lucide-react"
+
+import { FieldGroup } from "@/components/ui/field"
+import { defineSettingsSection } from "@/features/settings/define-section"
+import { NumberRow, SwitchRow } from "@/features/settings/fields"
+import { useSetting } from "@/features/settings/use-settings"
+
+function CityWatchSettings() {
+  // The fallback gives the type and is what the row shows until the settings have loaded.
+  const enabled = useSetting("city-watch.enabled", true)
+  const interval = useSetting("city-watch.intervalSeconds", 60)
+  return (
+    <FieldGroup>
+      <SwitchRow setting={enabled} label="Watch the city" description="Poll the bridge in the background." />
+      <NumberRow
+        setting={interval}
+        label="Check every"
+        description="How often the city is polled."
+        min={5}
+        max={3600}
+        unit="seconds"
+        disabled={!enabled.value}
+      />
+    </FieldGroup>
+  )
+}
+
+export default defineSettingsSection({
+  id: "city-watch", // the desktop feature's id
+  title: "City watch",
+  description: "Background polling of the city.",
+  icon: EyeIcon,
+  component: CityWatchSettings,
+})
+```
+
+**3. Register it**, one line in `web/src/features/settings/sections/index.ts` (replace the `export {}` placeholder the first time):
+
+```ts
+export { default as cityWatch } from "./city-watch"
+```
+
+The page adds the card (title, description, icon, anchor `/settings#city-watch`; a section that throws shows an error card and leaves the page alone). Import only from `@/features/settings/define-section`, `fields` and `use-settings`; never from `registry.ts` (it imports every section).
+
+**API** (all in `web/src/features/settings/`):
+
+```ts
+// define-section.ts
+defineSettingsSection(section: SettingsSectionDefinition): SettingsSectionDefinition   // throws unless id is kebab-case
+interface SettingsSectionDefinition { id: string; title: string; description?: string; icon?: LucideIcon; component: ComponentType }
+// registry.ts (used by the page; tests can vi.mock("@/features/settings/sections"))
+registeredSettingsSections(): SettingsSectionDefinition[]
+activeSettingsSections(features: readonly string[], sections?: readonly SettingsSectionDefinition[]): SettingsSectionDefinition[]
+
+// use-settings.ts
+useSetting<T>(key: string, fallback: T): SettingField<T>
+interface SettingField<T> {
+  key: string
+  value: T                    // optimistic while a save is in flight; `fallback` until loaded
+  available: boolean          // false until loaded, and when no feature defines the key (rows disable themselves)
+  save(value: T): Promise<boolean>   // POST { [key]: value }; resolves false when refused
+  status: "idle" | "saving" | "saved" | "error"
+  error: string | undefined   // the 400 body's message for this key
+  clearError(): void
+}
+useSaveSettings(): { save(patch: Record<string, unknown>): Promise<boolean>; saving: boolean; saved: boolean;
+                     issues: { key: string | null; message: string }[]; errorFor(key: string): string | undefined; clearError(): void }
+useDesktopSettings()          // useQuery of GET /api/desktop/settings, only in the desktop app
+settingIssues(error: unknown): { key: string | null; message: string }[]   // per-key issues of a failed save
+
+// fields.tsx: every row takes `setting`, `label`, optional `description` and `disabled`
+SwitchRow({ setting: SettingField<boolean>, … })                               // saves when toggled
+SelectRow<T extends string>({ setting: SettingField<T>, options: { value: T; label: string }[], … })   // saves when picked
+NumberRow({ setting: SettingField<number>, min?, max?, step?, unit?, … })      // saves on Enter / blur; Escape reverts; checks the range first
+TextRow({ setting: SettingField<string | null>, placeholder?, validate?(value): string | undefined, … })  // empty saves null
+HotkeyRow({ setting: SettingField<string | null>, … })                         // records a key combination as an Electron accelerator ("CommandOrControl+Shift+O"); null clears
+Hotkey({ accelerator })  SaveIndicator({ status })
+```
+
+Behaviour you get for free: optimistic update with rollback of just that key when the save is refused, `Saving…` / `Saved` next to the label, the per-field message (`role="alert"`, linked with `aria-describedby`, `aria-invalid`), keyboard operation, narrow layouts. A value type that can be cleared must allow `null` in the main-process schema (`z.string().nullable()`). For a hotkey, `HotkeyRow` only captures the accelerator; registering it (and reporting "already used by another application") is the feature's job: a schema cannot know whether the OS accepts it, so validate the format in the schema (a `.refine`) and report conflicts in the feature's own status instead.
+
+**Testing a section** (web side, `web/src/test/settings-sections.test.tsx` is the model): `vi.mock("@/features/settings/sections", …)` with your section, `mockDesktopSettings({ values: {"city-watch.enabled": true}, features: ["city-watch"], validate: {"city-watch.intervalSeconds": (v) => … message or undefined} })` from `web/src/test/desktop-settings.ts` (an in-memory stand-in for `GET/POST /api/desktop/settings` with the real 400 shape, `posts` and `responses` for assertions, and desktop mode switched on), then `renderApp("/settings")`.
+
 ## Recipes for the planned features
 
 - **Tray / close to tray**: `ctx.onWindowAllClosed(() => "keep-running")` and hide instead of closing:
@@ -309,10 +415,10 @@ Settings store details: JSON at `<userData>/settings.json` (`{ "version": 1, "va
 - **Overlay window**: `ctx.createWindow({ route: "/overlay", width: 360, height: 220, alwaysOnTop: true, frame: false, skipTaskbar: true })`. The page is a normal TanStack route in `web/src/routes/` (the SPA fallback serves it). Global hotkey: `globalShortcut.register` in `onReady`, `globalShortcut.unregisterAll()` in `onBeforeQuit`.
 - **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable. Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core.
 - **Start with Windows / hidden start**: `app.setLoginItemSettings({ openAtLogin, args: ["--hidden"] })`; with `--hidden` the main window is not created (`ctx.launch.hidden`), so pair it with the tray. In dev, the login item would start bare `electron.exe`: only enable it when `ctx.isPackaged`.
-- **Settings page**: a web route that reads `GET /api/desktop/settings` and writes with `apiPost("/desktop/settings", patch)`; `useDesktop()` decides whether to show it. Feature settings appear there automatically under their namespaced keys.
+- **Settings page**: exists (see "The settings page and adding a settings section"); give your feature a section there instead of a page of your own.
 - **Packaging / auto-update**: package `dist/**` and `package.json` (`main` is `dist/main.cjs`); icon `assets/icon.ico`; app id `com.cs2mcp.companion`, product name from `productName`. Nothing else is needed at runtime. Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
 
 ## Testing
 
 - `npm test` (in `desktop/`): settings store, route registry, config precedence, lifecycle, the `app://` handler (static, CSP, proxy, Origin check, settings routes), `ctx.bridge`, version parity, and the README feature example. No Electron needed.
-- `npm run smoke`: builds, starts `scripts/stub-bridge.mjs` on a free port, launches Electron with `CS2_BRIDGE_URL` pointing at it, a throwaway profile and `--remote-debugging-port`, then drives the window over the DevTools protocol: dashboard shows the stub city, no Node in the renderer, CSP blocks inline scripts, `/api/desktop/info`, `POST /api/build/road` refused before the bridge, no token in `/api/desktop/settings`, settings POST/validation, `window.open` denied, navigation blocked, single instance, clean quit, saved window state. Options: `--screenshot <file.png>`, `--verbose`. It never contacts a real bridge. Add a check there when your feature has visible end-to-end behaviour.
+- `npm run smoke`: builds, starts `scripts/stub-bridge.mjs` on a free port, launches Electron with `CS2_BRIDGE_URL` pointing at it, a throwaway profile and `--remote-debugging-port`, then drives the window over the DevTools protocol: dashboard shows the stub city, no Node in the renderer, CSP blocks inline scripts, `/api/desktop/info`, `POST /api/build/road` refused before the bridge, no token in `/api/desktop/settings`, settings POST/validation, `window.open` denied, navigation blocked, single instance, clean quit, saved window state. Options: `--screenshot <file.png>`, `--verbose`. It never contacts a real bridge. Then `scripts/smoke-settings.mjs` starts a second app (own profile seeded with stub A's URL, no environment overrides) and drives the real settings page: the header's Settings item, the saved URL and its source, changing the URL to stub B and setting a token through the form, the whole app switching to B, B receiving the token, and no response body, page text or log containing it; `--settings-screenshots <dir>` saves PNGs of the page (wide/narrow, light/dark). Add a check there when your feature has visible end-to-end behaviour.
