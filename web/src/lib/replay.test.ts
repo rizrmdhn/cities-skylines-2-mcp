@@ -5,6 +5,7 @@ import {
   nextPlayStep,
   replayMarkers,
   replayView,
+  sessionView,
   stepAt,
   stepBy,
 } from "@/lib/replay"
@@ -66,6 +67,18 @@ describe("replay view", () => {
 
   it("stays put for a step without a position", () => {
     expect(replayView(stepAt(latest, 3), view)).toBeUndefined()
+  })
+})
+
+describe("session view", () => {
+  it("fits every position of the session", () => {
+    // x 0..600, z -340..300 around (300, -20): 640 m -> zoom 3.749, rounded down to a quarter: 3.5
+    expect(sessionView(latest)).toEqual({ cx: 300, cz: -20, zoom: 3.5 })
+  })
+
+  it("is undefined for a session without positions", () => {
+    const [taxes] = groupSessions(sessionEntries.filter((e) => e.path === "/city/taxes/set").slice(0, 1))
+    expect(sessionView(taxes)).toBeUndefined()
   })
 })
 

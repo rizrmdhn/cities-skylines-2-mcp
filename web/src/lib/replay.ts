@@ -47,16 +47,27 @@ export function nextPlayStep(session: Session, current: number | undefined) {
   return now >= session.steps.length ? undefined : now + 1
 }
 
-/** Zoom that shows a step's whole extent in about 60% of the map, never closer than `minZoom` for a point. */
+/** Zoom that shows an extent (metres) in about 60% of the map; undefined for a single spot. */
+function fitZoomFor(extent: number) {
+  return extent < 1 ? undefined : Math.log2((0.6 * WORLD_SIZE) / extent)
+}
+
 function fitZoom(step: Step) {
   const points = step.shapes.flatMap((shape) =>
     shape.kind === "point" ? [shape.at] : [shape.from, shape.to]
   )
   const xs = points.map((p) => p.x)
   const zs = points.map((p) => p.z)
-  const extent = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs))
-  if (extent < 1) return undefined
-  return Math.log2((0.6 * WORLD_SIZE) / extent)
+  return fitZoomFor(Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs)))
+}
+
+/** The whole session on the map: centred on all its positions, zoomed to fit them. Undefined without any position. */
+export function sessionView(session: Session): MapView | undefined {
+  const place = session.place
+  if (!place) return undefined
+  const fit = fitZoomFor(Math.max(place.max.x - place.min.x, place.max.z - place.min.z))
+  const zoom = fit === undefined ? 4 : Math.min(Math.max(fit, 2), 6)
+  return clampView({ cx: Math.round(place.centre.x), cz: Math.round(place.centre.z), zoom: Math.floor(zoom * 4) / 4 })
 }
 
 /** Where the map goes for a step: centred on it, zoomed in enough to see it. Undefined without a position. */

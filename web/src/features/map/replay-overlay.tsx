@@ -5,7 +5,8 @@ import { useThemeVersion } from "@/hooks/use-theme-version"
 import type { ReplayMarker } from "@/lib/replay"
 import { worldToScreen, type MapView, type Size } from "@/lib/world"
 
-const CURRENT = "#facc15"
+/** The current step: white with a dark casing, which reads on the dark and the bright end of the heatmap. */
+const CURRENT = "#ffffff"
 
 function drawReplay(
   ctx: CanvasRenderingContext2D,
@@ -39,7 +40,7 @@ function drawReplay(
   for (const marker of [...markers].sort((a, b) => Math.abs(b.step - current) - Math.abs(a.step - current))) {
     const isCurrent = marker.step === current
     const colour = isCurrent ? CURRENT : marker.ok ? MAP_COLOURS.markerOk : MAP_COLOURS.markerFailed
-    ctx.globalAlpha = marker.step > current ? 0.55 : 1
+    const upcoming = marker.step > current
 
     for (const shape of marker.shapes) {
       ctx.strokeStyle = MAP_COLOURS.casing
@@ -47,29 +48,22 @@ function drawReplay(
       if (shape.kind === "segment") {
         const from = at(shape.from)
         const to = at(shape.to)
-        ctx.lineWidth = isCurrent ? 7 : 5
-        ctx.setLineDash([])
+        ctx.lineWidth = isCurrent ? 8 : 5
+        ctx.setLineDash(upcoming ? [8, 5] : [])
         ctx.beginPath()
         ctx.moveTo(from.x, from.y)
         ctx.lineTo(to.x, to.y)
         ctx.stroke()
         ctx.strokeStyle = colour
-        ctx.lineWidth = isCurrent ? 4 : 2.5
+        ctx.lineWidth = isCurrent ? 5 : 2.5
         ctx.stroke()
-      } else if (isCurrent) {
-        // A ring around the current position, outside the numbered badge.
-        const p = at(shape.at)
-        ctx.lineWidth = 2
-        ctx.strokeStyle = colour
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, 17, 0, Math.PI * 2)
-        ctx.stroke()
+        ctx.setLineDash([])
       }
     }
 
     // The badge sits at the step's centre and carries the step's number.
     const p = at(marker.centre)
-    const radius = isCurrent ? 12 : 9
+    const radius = isCurrent ? 13 : upcoming ? 8 : 10
     ctx.lineWidth = 2
     ctx.strokeStyle = MAP_COLOURS.casing
     ctx.fillStyle = colour
@@ -78,11 +72,22 @@ function drawReplay(
     ctx.fill()
     ctx.stroke()
     ctx.fillStyle = "#0b1020"
-    ctx.font = `600 ${isCurrent ? 12 : 10}px ui-sans-serif, system-ui, sans-serif`
+    ctx.font = `700 ${isCurrent ? 13 : 10}px ui-sans-serif, system-ui, sans-serif`
     ctx.textAlign = "center"
     ctx.textBaseline = "middle"
     ctx.fillText(String(marker.step), p.x, p.y + 0.5)
-    ctx.globalAlpha = 1
+
+    if (isCurrent) {
+      // A ring in the result's colour (done / failed) around the current step's badge.
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 19, 0, Math.PI * 2)
+      ctx.lineWidth = 6
+      ctx.strokeStyle = MAP_COLOURS.casing
+      ctx.stroke()
+      ctx.lineWidth = 3
+      ctx.strokeStyle = marker.ok ? MAP_COLOURS.markerOk : MAP_COLOURS.markerFailed
+      ctx.stroke()
+    }
   }
 }
 

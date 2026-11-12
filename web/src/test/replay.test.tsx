@@ -99,11 +99,22 @@ describe("map replay", () => {
   })
 
   it("says so when a step has no position, and keeps the map where it is", async () => {
-    const { router } = renderApp(`/map?replay=${SESSION}&step=3`)
+    const { user, router } = renderApp(`/map?replay=${SESSION}&step=2`)
     const bar = await findBar()
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ cx: 300, cz: 300 }))
+
+    await user.click(within(bar).getByRole("button", { name: "Next step" }))
     expect(within(bar).getByText(/no position, so the map stays where it is/)).toBeInTheDocument()
     expect(within(bar).getByTestId("replay-summary")).toHaveTextContent("taxes set")
-    expect(router.state.location.search).not.toHaveProperty("cx")
+    await new Promise((resolve) => setTimeout(resolve, 600)) // longer than the map's URL debounce
+    expect(router.state.location.search).toMatchObject({ step: 3, cx: 300, cz: 300 })
+  })
+
+  it("shows the whole session when the replay opens on a step without a position", async () => {
+    const { router } = renderApp(`/map?replay=${SESSION}&step=3`)
+    await findBar()
+    // all positions of the session: centred on (300, -20), zoomed to fit
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ cx: 300, cz: -20, zoom: 3.5 }))
   })
 
   it("links back to the session and to the step's details", async () => {

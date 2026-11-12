@@ -108,7 +108,7 @@ function SessionTimeline() {
   const isOpen = (key: string) => toggled[key] ?? key === (focusKey ?? selectedSessionKey ?? latestKey)
   const openKeys = shown.filter(({ session }) => isOpen(session.key)).map(({ session }) => session.key)
 
-  const done = (name: string) => toast.success(`Saved ${name}`)
+  const done = (name: string) => toast.success(`Download started: ${name}`)
   const filtered = status !== "all" || kind !== undefined
   const actionCount = shownSessions.reduce((sum, session) => sum + session.steps.length, 0)
 
@@ -116,12 +116,12 @@ function SessionTimeline() {
     <Card>
       <CardHeader>
         <CardTitle>AI sessions</CardTitle>
-        <CardDescription>
+        <CardDescription className="max-md:col-span-2">
           {history.data
             ? `Newest first. ${filtered ? `${shownSessions.length} of ${plural(all.length, "session")}` : plural(all.length, "session")}, ${plural(history.data.total, "change")} since the save was loaded. A pause of 15 minutes starts a new session.`
             : "Newest first"}
         </CardDescription>
-        <CardAction className="flex flex-wrap items-center gap-2">
+        <CardAction className="flex flex-wrap items-center gap-2 max-md:col-start-1 max-md:row-span-1 max-md:row-start-3 max-md:mt-2 max-md:justify-self-start">
           <ToggleGroup
             variant="outline"
             size="sm"

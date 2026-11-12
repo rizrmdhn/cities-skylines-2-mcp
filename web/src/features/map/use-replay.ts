@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react"
 
 import { useActivity } from "@/features/activity/use-activity"
-import { clampStep, replayMarkers, replayView, stepAt } from "@/lib/replay"
+import { clampStep, replayMarkers, replayView, sessionView, stepAt } from "@/lib/replay"
 import { findSession } from "@/lib/sessions"
 import type { MapView } from "@/lib/world"
 
@@ -32,9 +32,13 @@ export function useReplay({
   })
 
   const key = session?.key
+  const framed = useRef<string>(undefined)
   useEffect(() => {
     if (!session) return
-    const target = replayView(stepAt(session, current), latest.current.view)
+    let target = replayView(stepAt(session, current), latest.current.view)
+    // Arriving on a step without a position: show the whole session instead of an empty map.
+    if (!target && framed.current !== session.key) target = sessionView(session)
+    framed.current = session.key
     if (target) latest.current.onPan(target)
     // Only when the session or the step changes: a refreshed history gives a new `session` object.
     // eslint-disable-next-line react-hooks/exhaustive-deps

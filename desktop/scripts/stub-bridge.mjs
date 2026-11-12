@@ -54,6 +54,36 @@ const FIXTURES = {
     simulationPaused: false,
     simulationSpeed: 1,
   },
+  // A land-value layer and a few roads around the places the sample history builds at, for the map.
+  "/city/gridmap": {
+    layer: "landValue",
+    textureSize: 16,
+    worldMin: -7168,
+    worldMax: 7168,
+    cellSize: 896,
+    unit: "land value per cell",
+    values: Array.from({ length: 256 }, (_, i) => {
+      const x = (i % 16) - 8
+      const z = Math.floor(i / 16) - 8
+      return Math.max(0, Math.round(100 - Math.hypot(x + 0.5, z + 0.5) * 9))
+    }),
+  },
+  "/city/road-network": {
+    roadCount: 6,
+    junctionCount: 2,
+    roads: [
+      [-600, -200, -400, -200, -200, -200, 80, 0],
+      [-200, -200, -50, -200, 100, -200, 55, 0],
+      [100, -200, 100, -25, 100, 150, 25, 0],
+      [100, 150, 300, 150, 500, 150, 70, 0],
+      [-400, -400, -400, -150, -400, 100, 90, 0],
+      [-120, 220, -10, 185, 100, 150, 60, 0],
+    ],
+    junctions: [
+      [-200, -200, 0],
+      [100, 150, 1],
+    ],
+  },
   "/city/demand": {
     residential: { householdDemand: 40, buildingDemand: { lowDensity: 200, mediumDensity: 120, highDensity: 30 } },
     commercial: { companyDemand: 10, buildingDemand: 90 },
