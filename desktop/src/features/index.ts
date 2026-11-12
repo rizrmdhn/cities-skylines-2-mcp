@@ -9,3 +9,4 @@
 export { default as appFolders } from "./app-folders.ts"
 export { default as historyArchive } from "./history-archive.ts"
 export { default as settingsApi } from "./settings-api.ts"
+export { default as updater } from "./updater.ts"
