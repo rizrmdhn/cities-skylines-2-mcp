@@ -17,6 +17,7 @@ import { createFileSink, createLogger } from "./logger.ts"
 import { createRouteRegistry } from "./routes.ts"
 import { installSecurity } from "./security.ts"
 import { openSettingsStore, type SecretCodec, type WindowState } from "./settings.ts"
+import { unpackedPath } from "./unpacked-path.ts"
 import { createWindowHost } from "./windows.ts"
 
 const APP_NAME = "CS2MCP Companion"
@@ -48,14 +49,17 @@ async function start() {
 
   await app.whenReady()
 
+  // Installed, dist/ is inside app.asar: Node reads it from there (the renderer files), but files
+  // handed to the OS by path (the window icon) are unpacked next to it.
   const distDir = __dirname
+  const unpackedDir = app.isPackaged ? unpackedPath(distDir) : distDir
   const userData = app.getPath("userData")
   const paths: DesktopPaths = {
     userData,
     logs: join(userData, "logs"),
     renderer: join(distDir, "renderer"),
-    assets: join(distDir, "assets"),
-    icon: join(distDir, "assets", process.platform === "win32" ? "icon.ico" : "icon.png"),
+    assets: join(unpackedDir, "assets"),
+    icon: join(unpackedDir, "assets", process.platform === "win32" ? "icon.ico" : "icon.png"),
   }
   const log = createLogger(createFileSink({ file: join(paths.logs, "main.log"), echo: !app.isPackaged }))
   process.on("uncaughtException", (err) => log.error("uncaught exception", err))
