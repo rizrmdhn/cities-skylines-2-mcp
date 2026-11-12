@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router"
 import {
+  LocateFixedIcon,
   MousePointer2Icon,
   RefreshCwIcon,
   SplineIcon,
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { ExportCard } from "@/features/map/export-card"
 import { LAYER_LABELS } from "@/features/map/layers"
 import { MapCanvas } from "@/features/map/map-canvas"
 import { MapLegend } from "@/features/map/map-legend"
@@ -32,6 +34,7 @@ import { ReplayOverlay } from "@/features/map/replay-overlay"
 import { SelectionPanel } from "@/features/map/selection-panel"
 import { useReplay } from "@/features/map/use-replay"
 import { useRoads } from "@/features/map/use-roads"
+import { useSmoothFollow } from "@/features/map/use-smooth-follow"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
 import { useElementSize } from "@/hooks/use-element-size"
 import { GRID_LAYERS, type GridLayer } from "@/lib/bridge-types"
@@ -64,6 +67,7 @@ const SEARCH_DEFAULTS = {
   cz: 0,
   zoom: 0,
   follow: false,
+  indicator: true,
   mode: "point" as SelectionMode,
   roads: true,
   markers: true,
@@ -75,6 +79,7 @@ const mapSearch = z.object({
   cz: z.number().default(0).catch(0),
   zoom: z.number().default(0).catch(0),
   follow: z.boolean().default(false).catch(false),
+  indicator: z.boolean().default(true).catch(true),
   mode: z.enum(SELECTION_MODES).default("point").catch("point"),
   sel: z.string().optional().catch(undefined),
   roads: z.boolean().default(true).catch(true),
@@ -135,9 +140,16 @@ function MapWorkspace() {
   const [view, setView] = useState<MapView>(() =>
     clampView({ cx: search.cx, cz: search.cz, zoom: search.zoom })
   )
-  const shownView = followPivot
-    ? clampView({ ...view, cx: followPivot.x, cz: followPivot.z })
+  // Following, the centre glides to each polled camera position instead of jumping to it.
+  const followCentre = useSmoothFollow(
+    followPivot ? { x: followPivot.x, z: followPivot.z } : undefined,
+    { x: view.cx, z: view.cz }
+  )
+  const shownView = followCentre
+    ? clampView({ ...view, cx: followCentre.x, cz: followCentre.z })
     : view
+  // Set when moving the map by hand ended the following, so the page can offer to resume it.
+  const [followStopped, setFollowStopped] = useState(false)
   const settledView = useDebouncedValue(shownView, 350)
 
   // A URL change we did not write (a link, back/forward) moves the map there.
@@ -193,15 +205,23 @@ function MapWorkspace() {
   const selection = useMemo(() => decodeSelection(search.sel), [search.sel])
 
   const handleViewChange = (next: MapView) => {
-    if (followPivot && (next.cx !== shownView.cx || next.cz !== shownView.cz)) {
+    // Panning or zooming by hand ends the following; `next` starts from what is shown now.
+    if (search.follow) {
       setSearch({ follow: false })
+      setFollowStopped(true)
     }
     setView(next)
+  }
+  const changeFollow = (follow: boolean) => {
+    if (!follow) setView(shownView) // stay where the map is instead of snapping back
+    setFollowStopped(false)
+    setSearch({ follow })
   }
 
   // Only the tile fallback is limited to zoomed-in views; the whole network draws at any zoom.
   const roadsTooWide =
     search.roads && roads.source === "tiles" && size !== undefined && roadTilesFor(shownView, size) === null
+  const drawnRoads = roadsTooWide || !search.roads ? undefined : roads.network
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -210,9 +230,9 @@ function MapWorkspace() {
           view={shownView}
           size={size}
           grid={grid.data}
-          roads={roadsTooWide || !search.roads ? undefined : roads.network}
+          roads={drawnRoads}
           markers={markers}
-          camera={camera.data}
+          camera={search.indicator ? camera.data : undefined}
           selection={selection}
           mode={search.mode}
           onViewChange={handleViewChange}
@@ -293,6 +313,13 @@ function MapWorkspace() {
               onExit={() => setSearch({ replay: undefined, step: undefined })}
             />
           )}
+          {search.follow && followCentre && <Badge variant="secondary">Following the game camera</Badge>}
+          {!search.follow && followStopped && (
+            <Button variant="secondary" size="sm" className="shadow-sm" onClick={() => changeFollow(true)}>
+              <LocateFixedIcon data-icon="inline-start" />
+              Stopped following · Follow camera
+            </Button>
+          )}
           {roadsTooWide && <Badge variant="secondary">Zoom in to see roads</Badge>}
           {!roadsTooWide && roads.fetching && <Badge variant="outline">Loading roads</Badge>}
           {!roadsTooWide && roads.truncated > 0 && (
@@ -321,16 +348,31 @@ function MapWorkspace() {
           markers={search.markers}
           follow={search.follow}
           camera={camera.data}
+          indicator={search.indicator}
+          onIndicatorChange={(indicator) => setSearch({ indicator })}
           onRoadsChange={(roads) => setSearch({ roads })}
           onReloadRoads={reloadRoads}
           onMarkersChange={(on) => setSearch({ markers: on })}
-          onFollowChange={(follow) => setSearch({ follow })}
+          onFollowChange={changeFollow}
           onCentreCamera={() =>
             cameraPivot &&
             setView((current) =>
               clampView({ ...current, cx: cameraPivot.x, cz: cameraPivot.z, zoom: Math.max(current.zoom, 4) })
             )
           }
+        />
+        <ExportCard
+          layer={search.layer}
+          view={shownView}
+          size={size}
+          content={{
+            grid: grid.data,
+            roads: drawnRoads,
+            markers,
+            camera: camera.data,
+            selection,
+          }}
+          roadsPartial={roads.source === "tiles"}
         />
       </aside>
     </div>
