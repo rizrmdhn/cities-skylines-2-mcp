@@ -7,6 +7,7 @@ import {
 import { ActivityIcon, LayoutDashboardIcon, MapIcon, type LucideIcon } from "lucide-react"
 
 import { ConnectionAlerts, ConnectionBadge } from "@/components/connection-status"
+import { SimControls } from "@/components/sim-controls"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { buttonVariants } from "@/components/ui/button"
 import {
@@ -55,9 +56,10 @@ function RootLayout() {
   const connection = useConnection()
   return (
     <div className="flex h-svh flex-col">
-      <header className="flex items-center gap-3 border-b px-4 py-2">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2">
         <span className="font-heading text-sm font-semibold max-md:hidden">CS2MCP</span>
         <NavLinks />
+        <SimControls connection={connection} className="max-sm:order-last max-sm:w-full" />
         <div className="ms-auto flex items-center gap-2">
           <ConnectionBadge connection={connection} />
           <ThemeToggle />
