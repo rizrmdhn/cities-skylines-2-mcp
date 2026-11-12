@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as MapRouteImport } from './routes/map'
+import { Route as OverlayRouteImport } from './routes/overlay'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TrendsRouteImport } from './routes/trends'
 
@@ -30,6 +31,11 @@ const MapRoute = MapRouteImport.update({
   path: '/map',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OverlayRoute = OverlayRouteImport.update({
+  id: '/overlay',
+  path: '/overlay',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -45,6 +51,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
   '/map': typeof MapRoute
+  '/overlay': typeof OverlayRoute
   '/settings': typeof SettingsRoute
   '/trends': typeof TrendsRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
   '/map': typeof MapRoute
+  '/overlay': typeof OverlayRoute
   '/settings': typeof SettingsRoute
   '/trends': typeof TrendsRoute
 }
@@ -60,21 +68,30 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
   '/map': typeof MapRoute
+  '/overlay': typeof OverlayRoute
   '/settings': typeof SettingsRoute
   '/trends': typeof TrendsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/activity' | '/map' | '/settings' | '/trends'
+  fullPaths: '/' | '/activity' | '/map' | '/overlay' | '/settings' | '/trends'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/activity' | '/map' | '/settings' | '/trends'
-  id: '__root__' | '/' | '/activity' | '/map' | '/settings' | '/trends'
+  to: '/' | '/activity' | '/map' | '/overlay' | '/settings' | '/trends'
+  id:
+    | '__root__'
+    | '/'
+    | '/activity'
+    | '/map'
+    | '/overlay'
+    | '/settings'
+    | '/trends'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   MapRoute: typeof MapRoute
+  OverlayRoute: typeof OverlayRoute
   SettingsRoute: typeof SettingsRoute
   TrendsRoute: typeof TrendsRoute
 }
@@ -102,6 +119,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MapRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/overlay': {
+      id: '/overlay'
+      path: '/overlay'
+      fullPath: '/overlay'
+      preLoaderRoute: typeof OverlayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -123,6 +147,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   MapRoute: MapRoute,
+  OverlayRoute: OverlayRoute,
   SettingsRoute: SettingsRoute,
   TrendsRoute: TrendsRoute,
 }
