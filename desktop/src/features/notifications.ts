@@ -832,7 +832,6 @@ export function createNotifications(createView: NotifierFactory = createElectron
       let failures = 0
       let lastCity: string | null = null
       let lastWarningsAt = 0
-      let lastHistory: HistoryItem[] = []
       let status: { link: Observation["status"] | "unknown"; city: string | null; checkedAt: number | null } = {
         link: "unknown",
         city: null,
@@ -864,7 +863,6 @@ export function createNotifications(createView: NotifierFactory = createElectron
         const raw = await read<unknown>("/history", { limit: HISTORY_LIMIT })
         if (raw === null) return
         const answer = parseHistory(raw)
-        lastHistory = answer.entries
         const summary = activity.observe(answer, now)
         if (summary) for (const draft of activityDrafts(summary, answer.entries, o.city)) await emit(draft)
         const event = limit.observe(answer, spendingLimitPercent.get())
@@ -884,7 +882,6 @@ export function createNotifications(createView: NotifierFactory = createElectron
         for (const tracker of trackers) tracker.reset()
         lastCity = null
         lastWarningsAt = 0
-        lastHistory = []
         failures = 0
       }
 
@@ -914,7 +911,6 @@ export function createNotifications(createView: NotifierFactory = createElectron
           limit.reset()
           popup.reset()
           lastWarningsAt = 0
-          lastHistory = []
           lastCity = cityKey
         }
 
