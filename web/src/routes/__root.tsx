@@ -16,6 +16,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { OverlayButton } from "@/features/overlay/overlay-button"
 import { useConnection } from "@/lib/connection"
 import { useDesktop } from "@/lib/desktop"
 import type { RouterContext } from "@/router"
@@ -60,7 +61,16 @@ function NavLinks() {
   )
 }
 
+/** Routes that fill a window of their own and must not get the app header and connection alerts. */
+const BARE_ROUTES = ["/overlay"] as const
+
 function RootLayout() {
+  const matchRoute = useMatchRoute()
+  if (BARE_ROUTES.some((to) => matchRoute({ to }))) return <Outlet />
+  return <AppShell />
+}
+
+function AppShell() {
   const connection = useConnection()
   return (
     <div className="flex h-svh flex-col">
@@ -69,6 +79,7 @@ function RootLayout() {
         <NavLinks />
         <SimControls connection={connection} className="max-sm:order-last max-sm:w-full" />
         <div className="ms-auto flex items-center gap-2">
+          <OverlayButton />
           <ConnectionBadge connection={connection} />
           <ThemeToggle />
         </div>

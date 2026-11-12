@@ -8,6 +8,7 @@
  */
 export { default as appFolders } from "./app-folders.ts"
 export { default as historyArchive } from "./history-archive.ts"
+export { default as overlay } from "./overlay.ts"
 export { default as saveFile } from "./save-file.ts"
 export { default as settingsApi } from "./settings-api.ts"
 export { default as tray } from "./tray.ts"

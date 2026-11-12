@@ -10,6 +10,7 @@
  *     (never a raw fetch); they are disabled while the bridge is read-only or no city is loaded.
  *   - Close to tray (setting tray.closeToTray, default on): closing the main window hides it and
  *     the app keeps running; the first time, a balloon explains where it went.
+ *   - Other features can add menu items with contributeToTrayMenu() (the overlay's "Show overlay").
  *   - Left click toggles the window, double click opens it.
  *   - Works when the app was launched with --hidden (no main window exists yet): the tray is
  *     created in onReady either way and "Open" creates the window.
@@ -205,6 +206,8 @@ export interface MenuActions {
 }
 
 export interface MenuModel {
+  /** Items other features contributed (see contributeToTrayMenu); shown below Speed. */
+  extra?: MenuItemConstructorOptions[]
   snapshot: TraySnapshot
   /** The speed "Resume" returns to. */
   resumeSpeed: number
@@ -212,7 +215,7 @@ export interface MenuModel {
   startWithWindows: boolean | null
 }
 
-export function buildMenu({ snapshot, resumeSpeed, startWithWindows }: MenuModel, actions: MenuActions): MenuItemConstructorOptions[] {
+export function buildMenu({ snapshot, resumeSpeed, startWithWindows, extra = [] }: MenuModel, actions: MenuActions): MenuItemConstructorOptions[] {
   const control = canControl(snapshot)
   const paused = snapshot.paused === true
   const items: MenuItemConstructorOptions[] = [
@@ -235,6 +238,7 @@ export function buildMenu({ snapshot, resumeSpeed, startWithWindows }: MenuModel
       })),
     },
   ]
+  if (extra.length > 0) items.push({ type: "separator" }, ...extra)
   if (startWithWindows !== null) {
     items.push(
       { type: "separator" },
@@ -248,6 +252,36 @@ export function buildMenu({ snapshot, resumeSpeed, startWithWindows }: MenuModel
   }
   items.push({ type: "separator" }, { label: "Quit", click: actions.quit })
   return items
+}
+
+// ---------------------------------------------------------------------------------------------
+// Menu items from other features
+// ---------------------------------------------------------------------------------------------
+
+/** Builds the items a feature wants in the tray menu; called at every menu build, so read live state in it. */
+export type TrayMenuContribution = () => MenuItemConstructorOptions[]
+
+const contributions = new Set<TrayMenuContribution>()
+let refreshMenu: (() => void) | null = null
+
+/**
+ * Adds items to the tray menu (below Speed, above Start with Windows), e.g. the overlay's
+ * "Show overlay". Works whatever the feature order: the menu is rebuilt when a contribution is
+ * added. Call refreshTrayMenu() when the items would change (a label, a checkbox); the menu is
+ * only rebuilt when their labels/state differ. Returns the function that removes them again.
+ */
+export function contributeToTrayMenu(items: TrayMenuContribution): () => void {
+  contributions.add(items)
+  refreshMenu?.()
+  return () => {
+    contributions.delete(items)
+    refreshMenu?.()
+  }
+}
+
+/** Rebuilds the tray menu now if the contributed items changed. No-op without a tray. */
+export function refreshTrayMenu() {
+  refreshMenu?.()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -378,14 +412,28 @@ export function createTray(createView: TrayViewFactory = createElectronTray): De
         quit: () => ctx.quit(),
       }
 
+      function contributedItems(): MenuItemConstructorOptions[] {
+        const items: MenuItemConstructorOptions[] = []
+        for (const contribution of contributions) {
+          try {
+            items.push(...contribution())
+          } catch (err) {
+            ctx.log.warn("a tray menu contribution failed", err)
+          }
+        }
+        return items
+      }
+
       function render(force = false) {
         if (!view) return
         const startup = startWithWindows()
-        const key = JSON.stringify([snapshot.state, snapshot.city, snapshot.paused, snapshot.speed, snapshot.readOnly, resumeSpeed, startup])
+        const extra = contributedItems()
+        // Functions (click handlers) drop out of the JSON: the key covers labels and state only.
+        const key = JSON.stringify([snapshot.state, snapshot.city, snapshot.paused, snapshot.speed, snapshot.readOnly, resumeSpeed, startup, extra])
         if (!force && key === shownKey) return
         shownKey = key
         view.show(iconFor(snapshot.state), tooltipFor(snapshot))
-        view.setMenu(buildMenu({ snapshot, resumeSpeed, startWithWindows: startup }, actions))
+        view.setMenu(buildMenu({ snapshot, resumeSpeed, startWithWindows: startup, extra }, actions))
       }
 
       // --- control ----------------------------------------------------------------------------
@@ -464,6 +512,7 @@ export function createTray(createView: TrayViewFactory = createElectronTray): De
           ctx.log.error("could not create the tray icon; close-to-tray is off", err)
           return
         }
+        refreshMenu = () => render()
         render(true)
         // The start-with-Windows feature may define its key after us, so subscribe once everything is set up.
         ctx.settings.onChange(START_WITH_WINDOWS_KEY, () => render(true))
@@ -475,6 +524,7 @@ export function createTray(createView: TrayViewFactory = createElectronTray): De
 
       ctx.onBeforeQuit(() => {
         stopped = true
+        refreshMenu = null
         clearTimeout(timer)
         clearTimeout(clickTimer)
         view?.destroy()
