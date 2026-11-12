@@ -90,6 +90,49 @@ describe("app:// /api proxy", () => {
     expect(bridge.calls).toHaveLength(1)
   })
 
+  it("forwards the simulation control POST from the app's own pages only", async () => {
+    const calls: { url: string; method: string | undefined; headers: Record<string, string> }[] = []
+    const bridgeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: init?.method,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      })
+      return Response.json({ paused: false, selectedSpeed: 8 })
+    }) as typeof fetch
+    const t = await createTestContext({ bridgeFetch, env: { CS2MCP_TOKEN: TOKEN } })
+
+    // What the renderer's fetch sends: a POST with the app's own Origin.
+    const own = await t.fetch("/api/sim/control?speed=8", { method: "POST", headers: { Origin: "app://cs2mcp" } })
+    expect(own.status).toBe(200)
+    expect(await own.json()).toEqual({ paused: false, selectedSpeed: 8 })
+    expect(calls).toEqual([
+      {
+        url: "http://127.0.0.1:8642/sim/control?speed=8",
+        method: "POST",
+        headers: expect.objectContaining({ "X-CS2MCP-Token": TOKEN }),
+      },
+    ])
+
+    const foreign = await t.fetch("/api/sim/control?paused=true", {
+      method: "POST",
+      headers: { Origin: "https://evil.example" },
+    })
+    expect(foreign.status).toBe(403)
+    const invalid = await t.fetch("/api/sim/control?speed=9&x=1", { method: "POST", headers: { Origin: "app://cs2mcp" } })
+    expect(invalid.status).toBe(400)
+    const viaGet = await t.request("GET", "/api/sim/control?paused=true")
+    expect(viaGet).toMatchObject({ status: 405, body: { kind: "companion" } })
+    expect(viaGet.headers.get("Allow")).toBe("POST")
+    const other = await t.fetch("/api/sim/run?hours=1", { method: "POST", headers: { Origin: "app://cs2mcp" } })
+    expect(other.status).toBe(405)
+    expect(calls).toHaveLength(1)
+
+    // ctx.bridge stays read-only.
+    await expect(t.ctx.bridge.get("/sim/control", { paused: true })).rejects.toMatchObject({ status: 405 })
+    expect(calls).toHaveLength(1)
+  })
+
   it("reports an unreachable bridge", async () => {
     const t = await createTestContext()
     const res = await t.request("GET", "/api/ping")
