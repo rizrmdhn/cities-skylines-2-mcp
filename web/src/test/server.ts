@@ -1,6 +1,7 @@
 import { http, HttpResponse } from "msw"
 import { setupServer } from "msw/node"
 
+import type { DesktopInfo } from "@/lib/desktop"
 import * as fixtures from "@/test/fixtures"
 
 /** The /api contract of the web companion, answered with fixtures. Override per test with server.use. */
@@ -26,6 +27,10 @@ export const handlers = [
       ? HttpResponse.json(infoview)
       : HttpResponse.json({ view, refreshed: true, refreshError: null, values: {} })
   }),
+  // The browser companion: no desktop routes. Tests opt into the desktop app with enableDesktopMode().
+  http.all("*/api/desktop/*", ({ request }) =>
+    apiError(404, "companion", `unknown endpoint: ${new URL(request.url).pathname}`)
+  ),
 ]
 
 export const server = setupServer(...handlers)
@@ -33,4 +38,20 @@ export const server = setupServer(...handlers)
 /** An error body as the companion sends it. */
 export function apiError(status: number, kind: "unreachable" | "bridge" | "companion", error: string) {
   return HttpResponse.json({ error, status, kind }, { status })
+}
+
+export const desktopInfo: DesktopInfo = {
+  desktop: true,
+  version: __APP_VERSION__,
+  platform: "win32",
+  packaged: false,
+  features: ["settings-api"],
+}
+
+/**
+ * Makes the current test run "inside the desktop app": /api/desktop/info answers. Add handlers
+ * for the desktop routes a test needs with server.use(http.get("*\/api/desktop/x", ...)).
+ */
+export function enableDesktopMode(info: Partial<DesktopInfo> = {}) {
+  server.use(http.get("*/api/desktop/info", () => HttpResponse.json({ ...desktopInfo, ...info })))
 }
