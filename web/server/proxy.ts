@@ -81,6 +81,19 @@ export function isApiPath(pathname: string) {
 }
 
 /**
+ * True for a request that would change the game (a POST on a control route). Transports require
+ * the companion's own Origin on these, besides refusing foreign ones on every /api call: browsers
+ * always send an Origin on POST, so a missing one is a client we cannot vouch for.
+ */
+export function changesGame(method: string, pathname: string) {
+  return method === "POST" && findControlRoute(pathname) !== undefined
+}
+
+/** Refusal text for a control POST without an Origin. */
+export const ORIGIN_REQUIRED_MESSAGE =
+  "requests that change the game need an Origin header from the companion's own page"
+
+/**
  * Answers one /api request. Only two kinds reach the bridge, with only their own query parameters,
  * the bridge timeout header and the token:
  *   - GET on a read route (ALLOWED_ROUTES), unknown parameters dropped;

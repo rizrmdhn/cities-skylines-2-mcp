@@ -90,7 +90,7 @@ describe("app:// /api proxy", () => {
     expect(bridge.calls).toHaveLength(1)
   })
 
-  it("forwards the simulation control POST from the app's own pages only", async () => {
+  it("forwards the simulation control POST from the app's own origin only", async () => {
     const calls: { url: string; method: string | undefined; headers: Record<string, string> }[] = []
     const bridgeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       calls.push({
@@ -119,6 +119,9 @@ describe("app:// /api proxy", () => {
       headers: { Origin: "https://evil.example" },
     })
     expect(foreign.status).toBe(403)
+    const noOrigin = await t.fetch("/api/sim/control?paused=true", { method: "POST" })
+    expect(noOrigin.status).toBe(403)
+    expect(await noOrigin.json()).toMatchObject({ kind: "companion", status: 403 })
     const invalid = await t.fetch("/api/sim/control?speed=9&x=1", { method: "POST", headers: { Origin: "app://cs2mcp" } })
     expect(invalid.status).toBe(400)
     const viaGet = await t.request("GET", "/api/sim/control?paused=true")

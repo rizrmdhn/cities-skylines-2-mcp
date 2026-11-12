@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 
-import { findControlRoute } from "./routes.ts"
 import {
+  changesGame,
   errorResponse,
   isApiPath,
+  ORIGIN_REQUIRED_MESSAGE,
   proxyBridgeRequest,
   type ProxyResponse,
 } from "./proxy.ts"
@@ -46,7 +47,7 @@ export function refusalReason(
   }
   const origin = req.headers.origin?.toLowerCase()
   if (origin === undefined && requireOrigin) {
-    return "requests that change the game need an Origin header from the companion's own page"
+    return ORIGIN_REQUIRED_MESSAGE
   }
   if (
     origin !== undefined &&
@@ -68,7 +69,7 @@ export function createCompanionHandler(options: CompanionHandlerOptions) {
     if (!api && !options.serveStatic) return false
 
     const refusal = refusalReason(req, options.getPort(), {
-      requireOrigin: api && req.method === "POST" && findControlRoute(url.pathname) !== undefined,
+      requireOrigin: api && changesGame(req.method ?? "GET", url.pathname),
     })
     if (refusal) {
       sendProxyResponse(res, errorResponse(403, "companion", refusal))

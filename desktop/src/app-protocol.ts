@@ -7,7 +7,15 @@
  */
 import { readFile } from "node:fs/promises"
 
-import { errorResponse, isApiPath, proxyBridgeRequest, type ProxyOptions, type ProxyResponse } from "../../web/server/proxy.ts"
+import {
+  changesGame,
+  errorResponse,
+  isApiPath,
+  ORIGIN_REQUIRED_MESSAGE,
+  proxyBridgeRequest,
+  type ProxyOptions,
+  type ProxyResponse,
+} from "../../web/server/proxy.ts"
 import { resolveStaticFile } from "../../web/server/static-files.ts"
 import type { Logger } from "./logger.ts"
 import { isDesktopApiPath, type RouteRegistry } from "./routes.ts"
@@ -70,10 +78,14 @@ export function createAppHandler({ rendererDir, routes, proxyOptions, log }: App
     }
 
     if (isApiPath(url.pathname)) {
-      // Only our own pages may call the API (they send no Origin, or ours).
+      // Only our own pages may call the API: no Origin (a GET from our own page), or ours. A
+      // request that changes the game must carry ours (the renderer's fetch always sends it on POST).
       const origin = request.headers.get("Origin")
       if (origin !== null && origin !== APP_ORIGIN) {
         return toResponse(errorResponse(403, "companion", "requests from other sites are refused"))
+      }
+      if (origin === null && changesGame(request.method, url.pathname)) {
+        return toResponse(errorResponse(403, "companion", ORIGIN_REQUIRED_MESSAGE))
       }
       if (isDesktopApiPath(url.pathname)) {
         return toResponse(
