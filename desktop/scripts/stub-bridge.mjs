@@ -68,14 +68,15 @@ const FIXTURES = {
   },
 }
 
-/** Starts the stub on 127.0.0.1:`port` (0 = any free port). */
-export function startStubBridge(port = 0) {
+/** Starts the stub on 127.0.0.1:`port` (0 = any free port). `cityName` renames its city (to tell two stubs apart). */
+export function startStubBridge(port = 0, { cityName = CITY_NAME } = {}) {
   /** @type {{ method: string, url: string, headers: import("node:http").IncomingHttpHeaders }[]} */
   const requests = []
   const server = createServer((req, res) => {
     requests.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers })
     const path = new URL(req.url ?? "/", "http://stub.invalid").pathname
-    const body = req.method === "GET" ? FIXTURES[path] : undefined
+    let body = req.method === "GET" ? FIXTURES[path] : undefined
+    if (body && cityName !== CITY_NAME && "cityName" in body) body = { ...body, cityName }
     res.writeHead(body ? 200 : 503, { "Content-Type": "application/json" })
     res.end(JSON.stringify(body ?? { error: `${req.method} ${path} is not part of the stub bridge` }))
   })
