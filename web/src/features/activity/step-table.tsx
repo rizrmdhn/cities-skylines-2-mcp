@@ -10,7 +10,7 @@ import { actionLabel, formatMoneyDelta, formatTime } from "@/lib/format"
 import { stepEntries, type Step } from "@/lib/sessions"
 import { stepDetail, stepEntryId } from "@/lib/step-text"
 
-function StepResult({ step, running }: { step: Step; running: boolean }) {
+export function StepResult({ step, running }: { step: Step; running: boolean }) {
   if (step.kind === "batch" && !step.entry) {
     return running ? (
       <Badge variant="secondary">

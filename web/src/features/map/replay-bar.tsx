@@ -48,20 +48,17 @@ export function ReplayBar({ session, loading, sessionKey, step, onStep, onExit }
     stepRef.current = onStep
   })
 
-  // Play: move on every REPLAY_STEP_MS, stop after the last step.
+  // Play: move on every REPLAY_STEP_MS; at the last step it stops by itself.
+  const atEnd = !!session && current >= session.steps.length
+  const isPlaying = playing && !atEnd
   useEffect(() => {
-    if (!playing || !session) return
+    if (!isPlaying || !session) return
     const timer = setTimeout(() => {
       const next = nextPlayStep(session, current)
-      if (next === undefined) setPlaying(false)
-      else stepRef.current(next)
+      if (next !== undefined) stepRef.current(next)
     }, REPLAY_STEP_MS)
     return () => clearTimeout(timer)
-  }, [playing, session, current])
-  const atEnd = !!session && current >= session.steps.length
-  useEffect(() => {
-    if (playing && atEnd) setPlaying(false)
-  }, [playing, atEnd])
+  }, [isPlaying, session, current])
 
   if (!session) {
     return (
@@ -126,18 +123,18 @@ export function ReplayBar({ session, loading, sessionKey, step, onStep, onExit }
           <ChevronLeftIcon />
         </Button>
         <Button
-          variant={playing ? "secondary" : "outline"}
+          variant={isPlaying ? "secondary" : "outline"}
           size="icon-sm"
-          aria-label={playing ? "Pause" : "Play"}
+          aria-label={isPlaying ? "Pause" : "Play"}
           onClick={() => {
-            if (playing) setPlaying(false)
+            if (isPlaying) setPlaying(false)
             else {
               if (atEnd) onStep(1)
               setPlaying(true)
             }
           }}
         >
-          {playing ? <PauseIcon /> : <PlayIcon />}
+          {isPlaying ? <PauseIcon /> : <PlayIcon />}
         </Button>
         <Button
           variant="outline"
