@@ -1,6 +1,7 @@
 import type { HistoryEntry } from "@/lib/bridge-types"
 import { actionLabel, formatMoney, formatMoneyDelta, prettyJson } from "@/lib/format"
 import { formatDuration, SESSION_GAP_MS, type Session, type Step } from "@/lib/sessions"
+import { stepResultLabel, stepTitle } from "@/lib/step-text"
 
 /*
  * Session reports: Markdown for people, JSON for tools. Times are written in UTC so a report
@@ -55,20 +56,6 @@ export function entryError(entry: HistoryEntry): string | undefined {
     }
   }
   return entry.status === 0 ? "no result: the operation never completed" : `HTTP ${entry.status}`
-}
-
-function stepTitle(step: Step) {
-  if (step.kind === "single") return actionLabel(step.path)
-  const parts = `${step.parts.length} part${step.parts.length === 1 ? "" : "s"}`
-  return `${actionLabel(step.path)} (${parts}${step.entry ? "" : ", batch result not logged"})`
-}
-
-export function stepResultLabel(step: Step) {
-  if (step.ok) return "done"
-  if (step.kind === "batch" && step.failedParts > 0) {
-    return `failed (${step.failedParts} of ${step.parts.length} parts)`
-  }
-  return `failed${step.entry?.status ? ` ${step.entry.status}` : ""}`
 }
 
 function countList(items: { name: string; count: number }[], label: (name: string) => string) {
