@@ -40,6 +40,10 @@
       <HintPath>$(ManagedDLLPath)\Colossal.Core.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Colossal.UI.Binding">
+      <HintPath>$(ManagedDLLPath)\Colossal.UI.Binding.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Colossal.Logging">
       <HintPath>$(ManagedDLLPath)\Colossal.Logging.dll</HintPath>
       <Private>false</Private>

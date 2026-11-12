@@ -26,7 +26,7 @@ Cities: Skylines II
 
 - Windows + Steam 版《城市：天际线 2》
 - .NET SDK 8.0+（编译 Mod）
-- Node.js 18+（运行 MCP server）
+- Node.js 18+（运行 MCP server），Web 伴侣需要 22.12+
 
 ## 构建与安装
 
@@ -34,11 +34,23 @@ Cities: Skylines II
 # 1. 编译游戏内 Mod（构建后自动部署到游戏的本地 Mods 目录）
 dotnet build CS2MCP.Bridge\CS2MCP.Bridge.csproj
 
-# 2. 构建 MCP server
-cd mcp-server
-npm install
+# 2. 安装并构建 MCP server 与 Web 伴侣（在仓库根目录执行）
+npm run setup
 npm run build
 ```
+
+根目录脚本（在仓库根目录执行 `npm run <名称>`）：
+
+| 脚本 | 作用 |
+|---|---|
+| `setup` | 在 `mcp-server/` 和 `web/` 中执行 `npm install` |
+| `build` / `build:mcp` / `build:web` | 构建全部或其中之一 |
+| `mcp:register` / `mcp:unregister` | 以用户级作用域把 `cs2` 注册到 Claude Code（所有项目可用），或将其移除 |
+| `web` | 构建并启动 [Web 伴侣](#web-伴侣)，地址 http://127.0.0.1:8643 |
+| `web:start` / `web:dev` | 不重新构建直接启动 / 以热更新模式运行于 http://127.0.0.1:5173 |
+| `web:shortcut` / `web:shortcut:remove` | 在桌面创建 **CS2MCP Companion** 快捷方式（Windows），或将其删除 |
+| `web:open` / `web:restart` / `web:stop` | 快捷方式所做的事（需要时在后台启动并打开浏览器）/ 重启 / 停止后台服务器 |
+| `test` | 对 Web 伴侣做类型检查并运行测试 |
 
 Mod 会部署到 `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\CS2MCP\`，游戏启动时自动加载，无需发布到 Paradox Mods。想临时禁用：把该文件夹改名为 `.CS2MCP`。
 
@@ -59,22 +71,26 @@ setx CS2_PATH "D:\Steam\steamapps\common\Cities Skylines II"
 
 ### 运行时环境变量（支持 .env）
 
-MCP server 通过 [dotenv](https://github.com/motdotla/dotenv) 读取 `mcp-server/.env`（参考 `.env.example`）：
+MCP server 通过 [dotenv](https://github.com/motdotla/dotenv) 读取 `mcp-server/.env`（参考 `.env.example`），无论从哪个目录启动都一样；工作目录中的 `.env` 只补充它未设置的变量。Web 伴侣先读 `web/.env`，再读同一个 `mcp-server/.env`，因此一个文件即可同时配置两者。
 
 | 变量 | 作用域 | 默认值 | 说明 |
 |---|---|---|---|
-| `CS2_BRIDGE_URL` | MCP server | `http://127.0.0.1:8642` | 桥接 Mod 的地址 |
+| `CS2_BRIDGE_URL` | MCP server、Web 伴侣 | `http://127.0.0.1:8642` | 桥接 Mod 的地址 |
 | `CS2MCP_PORT` | 游戏进程 | `8642` | 桥接 Mod 的监听端口（改它需同步改 `CS2_BRIDGE_URL`） |
-| `CS2MCP_TOKEN` | 游戏进程**与** MCP server | *（未设置）* | 可选共享密钥，以 `X-CS2MCP-Token` 请求头发送；给游戏进程设置后，除 `/ping` 外所有路由都要求携带。此外无论是否设置，带 `Origin` 头或 `Host` 非回环地址的请求一律拒绝，改变状态的路由必须用 POST |
+| `CS2MCP_WEB_PORT` | Web 伴侣 | `8643` | Web 伴侣的端口 |
+| `CS2MCP_TOKEN` | 游戏进程、MCP server **与** Web 伴侣 | *（未设置）* | 可选共享密钥，以 `X-CS2MCP-Token` 请求头发送；给游戏进程设置后，除 `/ping` 外所有路由都要求携带。此外无论是否设置，带 `Origin` 头或 `Host` 非回环地址的请求一律拒绝，改变状态的路由必须用 POST |
 | `CS2_PATH` | 构建期 | 自动探测 | 游戏安装目录 |
 
 ## 在 Claude 中使用
 
-**Claude Code**：仓库根目录的 [.mcp.json](.mcp.json) 已注册 `cs2` 服务器，在项目目录里打开 Claude Code 即可（首次会询问是否信任）。在其他目录手动注册：
+**Claude Code**：要在所有项目中使用 `cs2`，在仓库根目录以用户级作用域注册一次：
 
 ```powershell
-claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
+npm run mcp:register      # 先构建 MCP server，再执行：claude mcp add --scope user cs2 -- node <仓库路径>\mcp-server\dist\index.js
+npm run mcp:unregister    # 移除注册
 ```
+
+在本仓库内，[.mcp.json](.mcp.json) 也会以项目级作用域注册 `cs2`（首次会询问是否信任），贡献者无需额外注册。
 
 **Claude Desktop**（`claude_desktop_config.json`）：
 
@@ -91,7 +107,23 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 
 启动游戏、读取存档，然后问 Claude："看看我的城市财政状况"、"在河边划一片住宅区"、"修一条路把工业区接上高速"。
 
-## 工具总览（91 个）
+## Web 伴侣
+
+一个只读页面，可以放在游戏和对话窗口旁边：
+
+- **仪表盘**：连接状态（桥接是否可达、游戏是否在加载、AI 请求是否关闭、只读模式、版本不一致）、城市概况、各项城市服务的状态（交通、电力、供水、污水、垃圾与回收、医疗、消防救援、警察、避难所、教育、邮政、公园、福利、通信）及各领域的警告图标、按幸福感与健康拆分的幸福度因素、城市中所有警告类型，以及分区需求。
+- **AI 活动**：经由桥接做出的每一项改动及其花费、结果与参数，以及相对 AI 花费上限的使用情况。
+- **地图**：以热力图显示整张地图的一个数据图层（地价、污染、地下水），放大后显示道路与车流（按 2 公里图块加载并缓存 5 分钟；经由桥接的改动会刷新它们）、游戏镜头位置，以及 AI 改动的位置。点击一个点，或拖出一个区域或一条线，即可得到世界坐标和可直接粘贴给 AI 的提示词。图层、位置与选择都保存在 URL 中。
+
+```powershell
+npm run web:shortcut   # 只需一次：构建并在桌面创建 "CS2MCP Companion" 快捷方式
+```
+
+游戏时双击该快捷方式：若伴侣尚未运行，会在后台启动（不显示控制台窗口），并在浏览器中打开 http://127.0.0.1:8643。关闭标签页后服务器继续运行，下次点击即刻打开；用 `npm run web:stop` 停止它。修改代码后先执行 `npm run build:web`，再执行 `npm run web:restart`（旧版本的服务器也会被快捷方式自动重启）。日志位于 `web/.runtime/companion.log`。若想在终端中运行：`npm run web`。
+
+浏览器从不直接访问桥接 Mod。伴侣服务器只监听 `127.0.0.1`，只转发固定列表中的只读 GET 路由，拒绝其他 Host、跨站请求和其他 HTTP 方法，并在服务器端附加 `CS2MCP_TOKEN`，令牌不会到达浏览器。它独立于 MCP server 运行，因此可以同时运行任意多个 MCP 客户端。
+
+## 工具总览（92 个）
 
 **状态与画面**
 
@@ -110,6 +142,7 @@ claude mcp add cs2 -- node <仓库路径>\mcp-server\dist\index.js
 | `cs2_demand` | RCI 需求 + 需求因子（内部 0-255 刻度，暂停时不刷新） |
 | `cs2_budget` | 收支明细：14 项收入 / 15 项支出来源 |
 | `cs2_city_services` | 电力、水务、垃圾状态 |
+| `cs2_infoview` | 即时重新计算的游戏信息视图面板数据：教育（各学段在读/适龄/容量）、医疗（病人、墓地）、垃圾（填埋场、处理）、警察（拘留所、监狱、犯罪）、避难所、电力、供水、邮政、通信等 |
 | `cs2_happiness` | 城市信息面板的幸福度因素（税、污染、服务、无家可归……）及其对健康/幸福的影响，最差优先 |
 | `cs2_economy` | 经济 > 生产面板的各资源数据（产量、含服务维护与最终消费的消耗、平衡、进出口、库存、产能、最大缺口），以及企业统计（岗位填充、盈利） |
 | `cs2_resources` | 自然资源地图（肥力、矿石、石油、鱼类、森林）及总量和最富集区域，用于选址专业化工业 |
