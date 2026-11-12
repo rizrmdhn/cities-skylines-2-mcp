@@ -168,7 +168,7 @@ describe("allowlisted routes", () => {
 })
 
 describe("refused requests never reach the bridge", () => {
-  it.each(["/api/build/road", "/api/sim/control", "/api/city/taxes/set", "/api/screenshot", "/api"])(
+  it.each(["/api/build/road", "/api/sim/run", "/api/city/taxes/set", "/api/screenshot", "/api"])(
     "answers 404 for %s",
     async (path) => {
       const port = await startCompanion()
@@ -187,6 +187,29 @@ describe("refused requests never reach the bridge", () => {
     expect(res.json()).toMatchObject({ status: 405, kind: "companion" })
     expect(recorded).toHaveLength(0)
   })
+
+  it("answers 405 (Allow: POST) for GET /api/sim/control", async () => {
+    const port = await startCompanion()
+    const res = await call(port, "/api/sim/control?paused=true")
+    expect(res.status).toBe(405)
+    expect(res.headers.allow).toBe("POST")
+    expect(res.json()).toMatchObject({ status: 405, kind: "companion" })
+    expect(recorded).toHaveLength(0)
+  })
+
+  it.each(["/api/build/road", "/api/sim/run", "/api/game/save", "/api/ui/popups/dismiss", "/api/city/taxes/set"])(
+    "refuses POST %s even from the companion's own page",
+    async (path) => {
+      const port = await startCompanion()
+      const res = await call(port, path, {
+        method: "POST",
+        headers: { Origin: `http://127.0.0.1:${port}` },
+      })
+      expect(res.status).toBe(405)
+      expect(res.headers.allow).toBe("GET")
+      expect(recorded).toHaveLength(0)
+    }
+  )
 
   it("refuses a Host that is not loopback on the companion port", async () => {
     const port = await startCompanion()
@@ -213,6 +236,77 @@ describe("refused requests never reach the bridge", () => {
       expect(res.status, origin).toBe(403)
     }
     expect(recorded).toHaveLength(0)
+  })
+})
+
+describe("simulation control", () => {
+  function control(port: number, query: string, headers: Record<string, string> = {}) {
+    return call(port, `/api/sim/control${query}`, { method: "POST", headers })
+  }
+
+  it("forwards POST /api/sim/control as POST with only the validated parameters and the token", async () => {
+    reply = () => ({ status: 200, body: { paused: false, selectedSpeed: 4 } })
+    const port = await startCompanion()
+    const res = await control(port, "?speed=4", { Origin: `http://127.0.0.1:${port}` })
+    expect(res.status).toBe(200)
+    expect(res.json()).toEqual({ paused: false, selectedSpeed: 4 })
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0].method).toBe("POST")
+    expect(recorded[0].url).toBe("/sim/control?speed=4")
+    expect(recorded[0].headers["x-cs2mcp-token"]).toBe(TOKEN)
+    expect(recorded[0].headers["x-cs2mcp-timeout-ms"]).toBe("8500")
+    expect(recorded[0].headers.origin).toBeUndefined()
+    expect(res.text).not.toContain(TOKEN)
+  })
+
+  it("accepts the localhost origin too", async () => {
+    const port = await startCompanion()
+    const res = await control(port, "?paused=true", {
+      Host: `localhost:${port}`,
+      Origin: `http://localhost:${port}`,
+    })
+    expect(res.status).toBe(200)
+    expect(recorded[0].url).toBe("/sim/control?paused=true")
+  })
+
+  it("refuses a POST without an Origin header", async () => {
+    const port = await startCompanion()
+    const res = await control(port, "?paused=true")
+    expect(res.status).toBe(403)
+    expect(res.json()).toMatchObject({ status: 403, kind: "companion" })
+    expect(recorded).toHaveLength(0)
+  })
+
+  it("refuses a POST from another site", async () => {
+    const port = await startCompanion()
+    for (const origin of ["http://evil.example", `http://localhost:${port + 1}`, `https://127.0.0.1:${port}`, "null"]) {
+      const res = await control(port, "?speed=8", { Origin: origin })
+      expect(res.status, origin).toBe(403)
+    }
+    expect(recorded).toHaveLength(0)
+  })
+
+  it("refuses invalid values and extra parameters before the bridge", async () => {
+    const port = await startCompanion()
+    const origin = { Origin: `http://127.0.0.1:${port}` }
+    for (const query of ["", "?speed=9", "?speed=fast", "?paused=1", "?speed=1&dismissPopups=true", "?speed=1&speed=2"]) {
+      const res = await control(port, query, origin)
+      expect(res.status, query).toBe(400)
+      expect(res.json()).toMatchObject({ status: 400, kind: "companion" })
+    }
+    expect(recorded).toHaveLength(0)
+  })
+
+  it.each([
+    [403, "/sim/control is refused: read-only mode is on (game Options > CS2MCP)"],
+    [401, "missing or invalid X-CS2MCP-Token header"],
+    [409, "no city loaded"],
+  ])("passes bridge error %i through with its message", async (status, error) => {
+    reply = () => ({ status, body: { error } })
+    const port = await startCompanion()
+    const res = await control(port, "?paused=true", { Origin: `http://127.0.0.1:${port}` })
+    expect(res.status).toBe(status)
+    expect(res.json()).toEqual({ error, status, kind: "bridge" })
   })
 })
 
