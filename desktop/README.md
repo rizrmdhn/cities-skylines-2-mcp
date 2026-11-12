@@ -12,6 +12,8 @@ npm run desktop        # build web + desktop, then launch
 npm run desktop:build  # build only  -> desktop/dist/
 npm run desktop:start  # launch the last build
 npm run desktop:smoke  # build, then the end-to-end smoke test (below)
+npm run desktop:pack   # build, then an unpacked installed-app layout -> desktop/release/win-unpacked/
+npm run desktop:dist   # build, then installer + zip + update metadata -> desktop/release/
 npm test               # web typecheck + tests, desktop typecheck + tests
 ```
 
@@ -24,6 +26,7 @@ Inside `desktop/`:
 | `npm start` | `electron .` |
 | `npm test` / `npm run typecheck` | vitest (Node, no Electron) / `tsc` |
 | `npm run smoke` | build + `scripts/smoke.mjs` |
+| `npm run pack` / `npm run dist` | electron-builder on the existing `dist/` (unpacked folder / installer, zip and update metadata); build first, or use the root `desktop:pack` / `desktop:dist`, which also build the web app. See "Packaging, releases and updates". |
 | `npm run icons` | regenerates `assets/icon.ico` / `icon.png` from the favicon design (committed; rerun only when the favicon changes) |
 
 To see it work without the game: `node scripts/stub-bridge.mjs` prints a URL; start the app with `CS2_BRIDGE_URL=<that url>`.
@@ -42,7 +45,7 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 
 - **One implementation** of the bridge allowlist and of static-file lookup: `web/server/proxy.ts` and `web/server/static-files.ts` are transport-agnostic (plain data in/out). The browser companion's HTTP server and the Vite dev server use them through `web/server/handler.ts` / `static.ts`; the desktop app imports the same source files (bundled by esbuild).
 - `web/src/lib/api.ts` builds URLs from `window.location.origin`, so on `app://cs2mcp` the React app calls the main process with no change.
-- At runtime the app reads only `dist/` (`main.cjs`, `renderer/`, `assets/`), resolved from `__dirname`. The repo's `.env` files are read only when `app.isPackaged` is false. All npm packages are `devDependencies` because esbuild bundles them; keep it that way (a native module would have to be a `dependency` and left `external`).
+- At runtime the app reads only `dist/` (`main.cjs`, `renderer/`, `assets/`), resolved from `__dirname`. The repo's `.env` files are read only when `app.isPackaged` is false. All npm packages (zod, dotenv, `electron-updater` and its dependencies) are `devDependencies` because esbuild bundles them into `main.cjs`, so the installer ships no `node_modules`; keep it that way (a native module would have to be a `dependency`, left `external` and shipped). Installed, `dist/` lives inside `app.asar`; only `dist/assets` is unpacked (the OS opens the window icon by path).
 
 | file | role | loads Electron? |
 | --- | --- | --- |
@@ -57,10 +60,13 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 | `src/bridge.ts` | `ctx.bridge` client, `BridgeError` | no |
 | `src/logger.ts` | file logger | no |
 | `src/core-routes.ts` | `GET /api/desktop/info` | no |
+| `src/unpacked-path.ts` | `app.asar` → `app.asar.unpacked` for files the OS opens by path | no |
+| `src/update-releases.ts` | which GitHub release is the newest companion release (`desktop-v*` tags, channels, version order) | no |
 | `src/testing.ts` | `createTestContext()` for Node tests | no |
 | `src/features/index.ts` | **the registration list** | — |
 | `src/features/settings-api.ts` | built-in feature: `GET/POST /api/desktop/settings` | no |
 | `src/features/app-folders.ts` | built-in feature: opens the log / settings folder (settings page, About) | lazily, only when opening |
+| `src/features/updater.ts` | built-in feature: update check / download / install from GitHub Releases (`electron-updater`) | lazily, only when checking |
 
 Modules marked "no" must stay importable in plain Node: tests load them. Import Electron only with `import type` there.
 
@@ -106,6 +112,9 @@ The renderer calls `fetch("/api/desktop/<name>")` — GET for reads, POST with a
 | `POST /api/desktop/settings` | body: partial `{ "<key>": value }`. Each key is validated by its schema; unknown or unexposed keys are refused; all-or-nothing. `""` or `null` clears `bridgeUrl`/`token`. Answers like the GET. |
 | `GET /api/desktop/app-folders` | `{ "logs": "<path>", "settings": "<path>" }`, the fixed folders (feature `app-folders`) |
 | `POST /api/desktop/app-folders/open-logs`, `.../open-settings` | opens that folder in the file manager; takes no path (the body is ignored); 500 with the shell's message when it cannot |
+
+| `GET /api/desktop/updater` | the updater state (feature `updater`): `{ "status": "unsupported" \| "idle" \| "checking" \| "available" \| "downloading" \| "ready" \| "error", "unsupportedReason": string \| null, "currentVersion": "0.11.0", "availableVersion": string \| null, "releaseNotesUrl": string \| null, "progress": { "percent", "transferred", "total", "bytesPerSecond" } \| null, "lastCheck": ISO time \| null, "error": string \| null, "autoCheck", "autoDownload", "channel" }` |
+| `POST /api/desktop/updater/check` | checks now and answers with the state; `/download` starts the download and answers at once (`downloading`); `/install` quits, runs the downloaded installer and restarts the app. 409 when the action does not apply (development run, nothing found / downloaded yet). |
 
 A refused `POST /api/desktop/settings` also carries `issues`, one entry per rejected key, so a page can put each message next to its field: `{ "error": "bridgeUrl: must be an http:// or https:// URL", "status": 400, "kind": "companion", "issues": [{ "key": "bridgeUrl", "message": "must be an http:// or https:// URL" }] }` (`key: null` when the body as a whole is wrong; `ApiError.body` holds it on the web side).
 
@@ -415,7 +424,52 @@ Behaviour you get for free: optimistic update with rollback of just that key whe
 - **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable (`ctx.bridge` is GET only; the control POST exists only for the renderer). Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core.
 - **Start with Windows / hidden start**: `app.setLoginItemSettings({ openAtLogin, args: ["--hidden"] })`; with `--hidden` the main window is not created (`ctx.launch.hidden`), so pair it with the tray. In dev, the login item would start bare `electron.exe`: only enable it when `ctx.isPackaged`.
 - **Settings page**: exists (see "The settings page and adding a settings section"); give your feature a section there instead of a page of your own.
-- **Packaging / auto-update**: package `dist/**` and `package.json` (`main` is `dist/main.cjs`); icon `assets/icon.ico`; app id `com.cs2mcp.companion`, product name from `productName`. Nothing else is needed at runtime. Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
+- **Packaging / auto-update**: done, see "Packaging, releases and updates". Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
+
+## Packaging, releases and updates
+
+### Packaging
+
+`npm run desktop:dist` (repo root) builds the web app and the desktop bundle, then runs [electron-builder](https://www.electron.build/) 26 with [`electron-builder.yml`](electron-builder.yml) and writes to `desktop/release/` (git-ignored):
+
+| file | what |
+| --- | --- |
+| `CS2MCP-Companion-Setup-<version>.exe` | the NSIS installer (the thing to hand out) |
+| `CS2MCP-Companion-Setup-<version>.exe.blockmap` | lets updates download only the changed parts |
+| `latest.yml` | update metadata (version, size, sha512) read by installed apps; a prerelease version such as `0.12.0-beta.1` produces `beta.yml` instead |
+| `CS2MCP-Companion-<version>-win-x64.zip` | the same app without installer, for people who cannot or do not want to install (does **not** update itself) |
+| `win-unpacked/` | the unpacked app (what `npm run desktop:pack` alone produces) |
+
+Installer: Windows x64, **per user** (`%LOCALAPPDATA%\Programs\CS2MCP Companion`, never asks for administrator rights, the folder can be changed), a Start-menu shortcut and a desktop shortcut created by the first install (delete it and updates will not bring it back; there is no checkbox page for it), an uninstaller, "run after finish". Uninstalling keeps `%APPDATA%\CS2MCP Companion` (settings, logs, history archive). App id `com.cs2mcp.companion`, product name "CS2MCP Companion", icon `assets/icon.ico`. `app.asar` holds only `dist/**` and `package.json` (about 2.5 MB: no source, no `node_modules`, no `.env`, no source maps) next to Electron itself; the installer is about 120 MB, nearly all of it Electron.
+
+**Signing and SmartScreen.** The app is **unsigned** unless a code-signing certificate is provided: set `CSC_LINK` (path or base64 of the `.pfx`) and `CSC_KEY_PASSWORD` (`WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` also work) in the environment, or the repository secrets `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for the release workflow, and electron-builder signs the app, the uninstaller and the installer (SHA-256, DigiCert timestamp). Without a certificate the build succeeds and logs "signing is skipped". Consequence for users: Windows SmartScreen shows "Windows protected your PC / Unknown publisher" when they run the installer; they choose **More info → Run anyway**. The warning goes away only with a certificate (an EV certificate at once, a standard one after it built reputation). Auto-updates are not blocked by SmartScreen (the updater downloads and starts the installer itself), but the updater checks the downloaded installer only against the sha512 in the `latest.yml` of the same release, not against a publisher signature.
+
+**No administrator rights needed to build.** electron-builder's default Windows helper bundle (winCodeSign 2.6.0) contains macOS symlinks that Windows refuses to extract without administrator rights or Developer Mode ("Cannot create symbolic link: A required privilege is not held by the client"). `electron-builder.yml` therefore selects the symlink-free bundle with `toolsets.winCodeSign: "1.1.0"` (marked beta upstream). If it ever misbehaves when signing, delete that block and either enable Developer Mode (Settings → For developers) or run one build from an elevated shell so the cache fills.
+
+### What differs when installed (`app.isPackaged`)
+
+- `dist/` is read from inside `app.asar` (plain `fs` works there); the window icon and `ctx.paths.assets` come from `app.asar.unpacked/dist/assets` (`asarUnpack`), because the OS opens the icon by path (`src/unpacked-path.ts`).
+- The repo's `.env` files are never read (config: environment → settings → default); settings and logs are in `%APPDATA%\CS2MCP Companion`.
+- No application menu, devtools disabled in every window; `CS2MCP_DESKTOP_USER_DATA` still selects another profile folder.
+- Updates are active (`updater` feature), and only for the NSIS-installed copy: a development run, the zip build and `win-unpacked` report `unsupported`.
+
+### Updates
+
+The `updater` feature uses `electron-updater` (bundled into `main.cjs`) to update the installed app from the GitHub Releases of `rizrmdhn/cities-skylines-2-mcp`. It checks 30 seconds after start and every 6 hours, downloads in the background (differentially, using the blockmap) and installs the downloaded update when the app quits, or at once through "Restart and install". The header shows an indicator (with a popover: versions, progress, release notes, actions) only while an update is available, downloading or ready; **Settings → Updates** has the switches and a "Check now" button. Settings: `updater.autoCheck` (default on), `updater.autoDownload` (default on), `updater.channel` (`stable`, the default, or `beta`, which also takes prereleases). Neither the indicator nor the section does anything in the browser companion; in a development run the section is shown disabled with the reason.
+
+**Release tags.** The repository also holds the game mod's releases, and GitHub's "latest release" is repo-wide, so electron-updater's stock GitHub provider (which asks for it) could land on a mod release. Companion releases are therefore tagged **`desktop-v<version>`** (`desktop-v0.11.0`; prereleases `desktop-v0.12.0-beta.1`) and published with "latest" unchecked. The updater lists the repository's releases (`api.github.com`, newest 50; drafts are invisible), takes the highest semantic version among the published `desktop-v*` releases of the channel, and points electron-updater at that release's files (`.../releases/download/<tag>/latest.yml`). `publish.tagNamePrefix` in `electron-builder.yml` and `RELEASE_TAG_PREFIX` in `src/update-releases.ts` must stay equal. Unauthenticated GitHub API calls are limited (60 per hour per address); one check is one call.
+
+**Companion version vs mod version.** `desktop/package.json`, `web/package.json` and the mod (`CS2MCP.Bridge.csproj` `<Version>`, also `mcp-server/package.json`) share one version number, and the app warns ("version mismatch") when the mod reports a different base version than the app. So a companion release `desktop-vX.Y.Z` expects the mod `X.Y.Z`. An automatic update that moves the app to a new version before the mod was updated shows that warning until the mod is updated too. Release a feature version of both together (same number); a companion-only fix needs the mod's version bumped as well, or the comparison in `web/src/lib/connection.ts` relaxed to major.minor.
+
+### Releasing (maintainer procedure)
+
+1. Decide the version `X.Y.Z`. Set it in `desktop/package.json` and `web/package.json` (a test keeps them equal), and in `CS2MCP.Bridge.csproj` / `mcp-server/package.json` when the mod ships with it. Commit and merge to the default branch.
+2. Tag that commit and push the tag: `git tag desktop-vX.Y.Z && git push origin desktop-vX.Y.Z`. (Or start the "Desktop release" workflow manually in the Actions tab with that tag; it builds the commit it runs on.) The workflow fails at once if the tag differs from `desktop-v` + the version in `desktop/package.json`.
+3. The workflow (`.github/workflows/desktop-release.yml`, `windows-latest`) installs, runs `npm run desktop:dist` and creates a **draft** release "CS2MCP Companion X.Y.Z" with the installer, blockmap, zip and `latest.yml` (`beta.yml` for a prerelease version) attached. Running it again on a still-draft release replaces the files; a published release is never touched.
+4. Open the draft, check the generated notes and the files, then **Publish release** (leave "Set as the latest release" unchecked; versions containing `-` are already created as pre-releases). Installed apps find it at their next check.
+5. Recommended before publishing: install the draft's installer on a test machine; to see the update arrive, publish a later version and start the installed older one.
+
+Code signing: add the repository secrets `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (see above); nothing else changes.
 
 ## Testing
 
