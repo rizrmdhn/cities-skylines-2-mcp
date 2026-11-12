@@ -119,9 +119,11 @@ describe("app:// /api proxy", () => {
       headers: { Origin: "https://evil.example" },
     })
     expect(foreign.status).toBe(403)
-    const noOrigin = await t.fetch("/api/sim/control?paused=true", { method: "POST" })
-    expect(noOrigin.status).toBe(403)
-    expect(await noOrigin.json()).toMatchObject({ kind: "companion", status: 403 })
+    // Electron's own renderer sends no Origin on same-origin app:// requests (see the smoke test).
+    const noOrigin = await t.fetch("/api/sim/control?speed=2", { method: "POST" })
+    expect(noOrigin.status).toBe(200)
+    expect(calls).toHaveLength(2)
+    calls.pop()
     const invalid = await t.fetch("/api/sim/control?speed=9&x=1", { method: "POST", headers: { Origin: "app://cs2mcp" } })
     expect(invalid.status).toBe(400)
     const viaGet = await t.request("GET", "/api/sim/control?paused=true")
