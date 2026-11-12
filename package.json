@@ -19,6 +19,8 @@
     "desktop": "npm run build:web && npm run build:desktop && npm --prefix desktop start",
     "desktop:build": "npm run build:web && npm run build:desktop",
     "desktop:start": "npm --prefix desktop start",
+    "desktop:pack": "npm run desktop:build && npm --prefix desktop run pack",
+    "desktop:dist": "npm run desktop:build && npm --prefix desktop run dist",
     "desktop:smoke": "npm run desktop:build && node desktop/scripts/smoke.mjs",
     "test": "npm --prefix web run typecheck && npm --prefix web test && npm --prefix desktop run typecheck && npm --prefix desktop test",
     "mcp:register": "npm run build:mcp && node scripts/mcp-register.mjs",

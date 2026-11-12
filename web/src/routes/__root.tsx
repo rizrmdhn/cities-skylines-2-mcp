@@ -9,6 +9,7 @@ import { ActivityIcon, ChartLineIcon, LayoutDashboardIcon, MapIcon, SettingsIcon
 import { ConnectionAlerts, ConnectionBadge } from "@/components/connection-status"
 import { SimControls } from "@/components/sim-controls"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { UpdateIndicator } from "@/components/update-indicator"
 import { buttonVariants } from "@/components/ui/button"
 import {
   Empty,
@@ -80,6 +81,7 @@ function AppShell() {
         <SimControls connection={connection} className="max-sm:order-last max-sm:w-full" />
         <div className="ms-auto flex items-center gap-2">
           <OverlayButton />
+          <UpdateIndicator />
           <ConnectionBadge connection={connection} />
           <ThemeToggle />
         </div>

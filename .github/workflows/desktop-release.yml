@@ -1,0 +1,95 @@
+# Builds the CS2MCP Companion desktop app and attaches the installer and its update metadata to a
+# DRAFT GitHub release. Publishing the draft is what makes installed apps offer the update.
+#
+# Run it by pushing a tag `desktop-v<version>` (the version of desktop/package.json, e.g.
+# desktop-v0.11.0) or by starting it manually with that tag. Tags of the game mod's releases do
+# not match and never start it. See "Releasing" in desktop/README.md.
+name: Desktop release
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, desktop-v<version> as in desktop/package.json (e.g. desktop-v0.11.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+
+      - name: Check that the tag matches the app version
+        run: |
+          version=$(node -p "require('./desktop/package.json').version")
+          web_version=$(node -p "require('./web/package.json').version")
+          echo "tag: $RELEASE_TAG, desktop/package.json: $version, web/package.json: $web_version"
+          if [ "$RELEASE_TAG" != "desktop-v$version" ]; then
+            echo "::error::Tag '$RELEASE_TAG' does not match desktop/package.json version '$version' (expected 'desktop-v$version')."
+            exit 1
+          fi
+          if [ "$version" != "$web_version" ]; then
+            echo "::error::desktop/package.json ($version) and web/package.json ($web_version) must have the same version."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          npm --prefix web ci
+          npm --prefix desktop ci
+
+      # Builds the web app, bundles the desktop app and packages it into desktop/release/.
+      # Without the secrets the installer is unsigned; with them electron-builder signs it.
+      - name: Build and package
+        run: npm run desktop:dist
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Attach to a draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          files=(desktop/release/CS2MCP-Companion-*)
+          for f in desktop/release/*.yml; do
+            case "$(basename "$f")" in builder-*) ;; *) files+=("$f") ;; esac
+          done
+          printf 'attaching: %s\n' "${files[@]}"
+
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > draft.txt 2>/dev/null; then
+            if [ "$(cat draft.txt)" != "true" ]; then
+              echo "::error::Release $RELEASE_TAG is already published; it is not modified. Delete it or bump the version."
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          else
+            flags=(--draft --latest=false --target "$GITHUB_SHA" --title "CS2MCP Companion $VERSION" --generate-notes)
+            case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+            gh release create "$RELEASE_TAG" "${files[@]}" "${flags[@]}"
+          fi
