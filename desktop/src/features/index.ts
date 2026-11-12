@@ -6,4 +6,5 @@
  * main.ts sets up every export of this module (in alphabetical order of the export name).
  * Features must not depend on that order: use ctx.onReady for work that needs other features.
  */
+export { default as historyArchive } from "./history-archive.ts"
 export { default as settingsApi } from "./settings-api.ts"

@@ -7,6 +7,8 @@
  * Settings, routes, the bridge client, the app:// handler and the lifecycle are the production
  * implementations; only windows are stubbed (pass `windows` to provide your own fakes).
  */
+import { join } from "node:path"
+
 import type { BrowserWindow } from "electron"
 
 import { createAppHandler } from "./app-protocol.ts"
@@ -37,6 +39,8 @@ export interface TestContextOptions {
   env?: Record<string, string | undefined>
   /** .env layer of the bridge config. */
   dotenv?: Record<string, string>
+  /** `ctx.paths.userData` (default: a fake path nothing is written to). */
+  userData?: string
   /** Persist settings to this file (default: in memory). */
   settingsFile?: string
   /** Secret codec (default: none, secrets stored as plain text). */
@@ -102,8 +106,8 @@ export async function createTestContext(options: TestContextOptions = {}): Promi
     isPackaged: options.isPackaged ?? false,
     platform: process.platform,
     paths: {
-      userData: "/test/userData",
-      logs: "/test/userData/logs",
+      userData: options.userData ?? "/test/userData",
+      logs: join(options.userData ?? "/test/userData", "logs"),
       renderer: rendererDir,
       assets: "/test/assets",
       icon: "/test/assets/icon.ico",
