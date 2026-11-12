@@ -43,13 +43,15 @@ Root scripts (`npm run <name>` in the repository root):
 
 | Script | What it does |
 |---|---|
-| `setup` | `npm install` in `mcp-server/` and `web/` |
-| `build` / `build:mcp` / `build:web` | Build both, or one of them |
+| `setup` | `npm install` in `mcp-server/`, `web/` and `desktop/` |
+| `build` / `build:mcp` / `build:web` / `build:desktop` | Build MCP and web, or one component |
 | `mcp:register` / `mcp:unregister` | Register the `cs2` server with Claude Code for every project (user scope), or remove it |
 | `web` | Build and start the [web companion](#web-companion) on http://127.0.0.1:8643 |
 | `web:start` / `web:dev` | Start the last build without rebuilding / run it with hot reload on http://127.0.0.1:5173 |
 | `web:shortcut` / `web:shortcut:remove` | Put a **CS2MCP Companion** shortcut on the desktop (Windows), or remove it |
 | `web:open` / `web:restart` / `web:stop` | What the shortcut does (start in the background if needed, open the browser) / restart / stop the background server |
+| `desktop:start` / `desktop:build` | Launch the native companion / build its Electron app (also builds the web renderer) |
+| `desktop:pack` / `desktop:dist` | Create an unpacked Windows app / Windows installer, portable ZIP and update metadata |
 | `test` | Type-check and test the web companion |
 
 The mod deploys to `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\CS2MCP\` and loads automatically on game start — no Paradox Mods publishing required. To disable it temporarily, rename the folder to `.CS2MCP`.
@@ -134,6 +136,16 @@ npm run web:shortcut   # once: builds it and puts a "CS2MCP Companion" shortcut 
 Double-click the shortcut when you play: it starts the companion in the background (no console window) if it is not running yet and opens http://127.0.0.1:8643 in your browser. The server keeps running after you close the tab, so the next click is instant; `npm run web:stop` ends it. After changing the code, run `npm run build:web` and then `npm run web:restart` (a server from an older version is also restarted by the shortcut). Its log is in `web/.runtime/companion.log`. To run it in a terminal instead: `npm run web`.
 
 The browser never talks to the bridge itself. The companion server answers on `127.0.0.1` only, forwards a fixed list of read-only GET routes, refuses other Host names, cross-site requests and any other method, and adds `CS2MCP_TOKEN` on its side so the token never reaches the browser. It runs on its own, separate from the MCP server, so any number of MCP clients can run beside it.
+
+## Native desktop companion
+
+The Windows desktop app wraps the existing React companion in Electron and adds a system tray, a compact always-on-top overlay, notifications, trend history, saved city sessions, game detection, Start with Windows, automatic updates and a first-run setup wizard. It can bundle and register the MCP server with supported AI clients, so players do not need a separate Node.js installation for the desktop workflow.
+
+```powershell
+npm run desktop:dist   # build the Windows installer and portable ZIP in desktop/release/
+```
+
+The installer is per-user and does not require administrator rights. Settings and history stay in `%APPDATA%\CS2MCP Companion` after uninstall. See [desktop/README.md](desktop/README.md) for development, setup, packaging, update and release details. The web companion remains available independently through the commands above.
 
 ## Tool Reference (92 tools)
 

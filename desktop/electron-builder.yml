@@ -28,6 +28,7 @@ toolsets:
 # The window icon is handed to the OS by path, so it lives next to app.asar instead of inside it.
 asarUnpack:
   - dist/assets/**
+  - dist/mcp-server/**
 
 win:
   target:

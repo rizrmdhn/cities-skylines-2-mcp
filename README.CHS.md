@@ -43,13 +43,15 @@ npm run build
 
 | 脚本 | 作用 |
 |---|---|
-| `setup` | 在 `mcp-server/` 和 `web/` 中执行 `npm install` |
-| `build` / `build:mcp` / `build:web` | 构建全部或其中之一 |
+| `setup` | 在 `mcp-server/`、`web/` 和 `desktop/` 中执行 `npm install` |
+| `build` / `build:mcp` / `build:web` / `build:desktop` | 构建 MCP 与 Web，或单独构建其中一个组件 |
 | `mcp:register` / `mcp:unregister` | 以用户级作用域把 `cs2` 注册到 Claude Code（所有项目可用），或将其移除 |
 | `web` | 构建并启动 [Web 伴侣](#web-伴侣)，地址 http://127.0.0.1:8643 |
 | `web:start` / `web:dev` | 不重新构建直接启动 / 以热更新模式运行于 http://127.0.0.1:5173 |
 | `web:shortcut` / `web:shortcut:remove` | 在桌面创建 **CS2MCP Companion** 快捷方式（Windows），或将其删除 |
 | `web:open` / `web:restart` / `web:stop` | 快捷方式所做的事（需要时在后台启动并打开浏览器）/ 重启 / 停止后台服务器 |
+| `desktop:start` / `desktop:build` | 启动原生伴侣 / 构建 Electron 应用（同时构建 Web 界面） |
+| `desktop:pack` / `desktop:dist` | 创建未安装的 Windows 应用 / Windows 安装包、便携 ZIP 和更新元数据 |
 | `test` | 对 Web 伴侣做类型检查并运行测试 |
 
 Mod 会部署到 `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\CS2MCP\`，游戏启动时自动加载，无需发布到 Paradox Mods。想临时禁用：把该文件夹改名为 `.CS2MCP`。
@@ -122,6 +124,16 @@ npm run web:shortcut   # 只需一次：构建并在桌面创建 "CS2MCP Compani
 游戏时双击该快捷方式：若伴侣尚未运行，会在后台启动（不显示控制台窗口），并在浏览器中打开 http://127.0.0.1:8643。关闭标签页后服务器继续运行，下次点击即刻打开；用 `npm run web:stop` 停止它。修改代码后先执行 `npm run build:web`，再执行 `npm run web:restart`（旧版本的服务器也会被快捷方式自动重启）。日志位于 `web/.runtime/companion.log`。若想在终端中运行：`npm run web`。
 
 浏览器从不直接访问桥接 Mod。伴侣服务器只监听 `127.0.0.1`，只转发固定列表中的只读 GET 路由，拒绝其他 Host、跨站请求和其他 HTTP 方法，并在服务器端附加 `CS2MCP_TOKEN`，令牌不会到达浏览器。它独立于 MCP server 运行，因此可以同时运行任意多个 MCP 客户端。
+
+## 原生桌面伴侣
+
+Windows 桌面应用通过 Electron 承载现有 React 伴侣，并提供系统托盘、置顶迷你浮窗、通知、趋势历史、已保存的城市会话、游戏检测、Windows 启动项、自动更新和首次启动设置向导。它可以打包 MCP server 并为受支持的 AI 客户端完成注册，因此桌面使用流程无需另行安装 Node.js。
+
+```powershell
+npm run desktop:dist   # 在 desktop/release/ 生成 Windows 安装包和便携 ZIP
+```
+
+安装程序按当前用户安装，无需管理员权限。卸载后设置和历史记录仍保留在 `%APPDATA%\CS2MCP Companion`。开发、设置、打包、更新与发布说明见 [desktop/README.md](desktop/README.md)。Web 伴侣仍可通过上面的命令独立使用。
 
 ## 工具总览（92 个）
 
