@@ -98,6 +98,116 @@ describe("proxyBridgeRequest", () => {
   })
 })
 
+describe("control routes", () => {
+  function post(search: string, pathname = "/api/sim/control") {
+    return get(pathname, search, "POST")
+  }
+
+  it("forwards POST /api/sim/control as POST with only the validated parameters and the token", async () => {
+    const { calls, fetchFn } = fakeFetch(() => Response.json({ paused: false, selectedSpeed: 8 }))
+    const res = await proxyBridgeRequest(post("speed=8.0&paused=false"), {
+      bridgeUrl: BRIDGE,
+      token: TOKEN,
+      fetch: fetchFn,
+    })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ paused: false, selectedSpeed: 8 })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe("http://bridge.test:8642/sim/control?speed=8&paused=false")
+    expect(calls[0].init?.method).toBe("POST")
+    expect(calls[0].init?.body).toBeUndefined()
+    const headers = calls[0].init?.headers as Record<string, string>
+    expect(headers["X-CS2MCP-Token"]).toBe(TOKEN)
+    expect(headers["X-CS2MCP-Timeout-Ms"]).toBe("8500")
+    expect(JSON.stringify(res)).not.toContain(TOKEN)
+  })
+
+  it.each([
+    ["speed=0", "speed=0"],
+    ["speed=4", "speed=4"],
+    ["speed=0.5", "speed=0.5"],
+    ["paused=true", "paused=true"],
+    ["paused=false", "paused=false"],
+  ])("accepts %s", async (search, forwarded) => {
+    const { calls, fetchFn } = fakeFetch(() => Response.json({}))
+    const res = await proxyBridgeRequest(post(search), { bridgeUrl: BRIDGE, fetch: fetchFn })
+    expect(res.status).toBe(200)
+    expect(calls[0].url).toBe(`http://bridge.test:8642/sim/control?${forwarded}`)
+  })
+
+  it.each([
+    ["", "provide at least one of: speed, paused"],
+    ["speed=9", "speed must be a number from 0 to 8"],
+    ["speed=-1", "speed must be a number from 0 to 8"],
+    ["speed=", "speed must be a number from 0 to 8"],
+    ["speed=abc", "speed must be a number from 0 to 8"],
+    ["speed=Infinity", "speed must be a number from 0 to 8"],
+    ["speed=NaN", "speed must be a number from 0 to 8"],
+    ["speed=1e0", "speed must be a number from 0 to 8"],
+    ["speed=0x4", "speed must be a number from 0 to 8"],
+    ["speed= 4", "speed must be a number from 0 to 8"],
+    ["paused=yes", "paused must be true or false"],
+    ["paused=True", "paused must be true or false"],
+    ["paused=1", "paused must be true or false"],
+    ["speed=1&speed=8", "speed given more than once"],
+    ["speed=1&dismissPopups=true", "unknown parameter for /sim/control: dismissPopups"],
+    ["speed=1&dryRun=true", "unknown parameter for /sim/control: dryRun"],
+    ["__proto__=1", "unknown parameter for /sim/control: __proto__"],
+    ["constructor=1", "unknown parameter for /sim/control: constructor"],
+  ])("refuses %j with 400 before the bridge", async (search, error) => {
+    const { calls, fetchFn } = fakeFetch(() => Response.json({}))
+    const res = await proxyBridgeRequest(post(search), { bridgeUrl: BRIDGE, fetch: fetchFn })
+    expect(res.status).toBe(400)
+    expect(JSON.parse(res.body)).toEqual({ error, status: 400, kind: "companion" })
+    expect(calls).toHaveLength(0)
+  })
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD"])(
+    "answers 405 (Allow: POST) for %s /api/sim/control",
+    async (method) => {
+      const { calls, fetchFn } = fakeFetch(() => Response.json({}))
+      const res = await proxyBridgeRequest(get("/api/sim/control", "speed=1", method), {
+        bridgeUrl: BRIDGE,
+        fetch: fetchFn,
+      })
+      expect(res.status).toBe(405)
+      expect(res.headers.Allow).toBe("POST")
+      expect(JSON.parse(res.body)).toMatchObject({ status: 405, kind: "companion" })
+      expect(calls).toHaveLength(0)
+    }
+  )
+
+  it.each([
+    "/api/sim/run",
+    "/api/sim/control/",
+    "/api/sim/Control",
+    "/api/build/road",
+    "/api/game/save",
+    "/api/city/taxes/set",
+    "/api/ui/popups/dismiss",
+    "/api/state",
+    "/api/ping",
+  ])("refuses POST %s before the bridge", async (pathname) => {
+    const { calls, fetchFn } = fakeFetch(() => Response.json({}))
+    const res = await proxyBridgeRequest(post("speed=1", pathname), { bridgeUrl: BRIDGE, fetch: fetchFn })
+    expect(res.status).toBe(405)
+    expect(res.headers.Allow).toBe("GET")
+    expect(calls).toHaveLength(0)
+  })
+
+  it.each([
+    [403, "/sim/control is refused: read-only mode is on (game Options > CS2MCP)"],
+    [401, "missing or invalid X-CS2MCP-Token header"],
+    [409, "no city loaded"],
+    [400, "provide ?speed=0..8 and/or ?paused=true|false"],
+  ])("passes bridge error %i through with its message", async (status, error) => {
+    const { fetchFn } = fakeFetch(() => Response.json({ error }, { status }))
+    const res = await proxyBridgeRequest(post("paused=true"), { bridgeUrl: BRIDGE, fetch: fetchFn })
+    expect(res.status).toBe(status)
+    expect(JSON.parse(res.body)).toEqual({ error, status, kind: "bridge" })
+  })
+})
+
 describe("helpers", () => {
   it("recognises /api paths", () => {
     expect(isApiPath("/api")).toBe(true)
