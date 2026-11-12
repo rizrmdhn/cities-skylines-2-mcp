@@ -7,6 +7,7 @@
  * Features must not depend on that order: use ctx.onReady for work that needs other features.
  */
 export { default as appFolders } from "./app-folders.ts"
+export { default as gameDetect } from "./game-detect.ts"
 export { default as historyArchive } from "./history-archive.ts"
 export { default as overlay } from "./overlay.ts"
 export { default as saveFile } from "./save-file.ts"
