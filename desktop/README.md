@@ -73,6 +73,8 @@ The wizard detects and uses these Windows defaults:
 | --- | --- | --- |
 | Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json`; for a detected Microsoft Store install, `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json` | JSON registration; backs up and atomically updates only `mcpServers.cs2`. |
 | Claude Code | `%USERPROFILE%\.claude.json` (or `%CLAUDE_CONFIG_DIR%\.claude.json`) | Detected for status; offers CLI commands instead of editing the file. |
+| Codex (OpenAI) | `%USERPROFILE%\.codex\config.toml` (or `%CODEX_HOME%\config.toml`) | Read for status only. The wizard offers `codex mcp add cs2 --env … -- <exe> <server>` or a `[mcp_servers.cs2]` table to paste. Remove with `codex mcp remove cs2`. |
+| Gemini CLI | `%USERPROFILE%\.gemini\settings.json` | Read for status only. The wizard offers `gemini mcp add -e … --scope user cs2 <exe> <server>`. Remove with `gemini mcp remove --scope user cs2`. |
 | Cursor | `%USERPROFILE%\.cursor\mcp.json` | JSON registration under `mcpServers.cs2` with `type: "stdio"`. |
 | VS Code, default profile | `%APPDATA%\Code\User\mcp.json` | Copyable snippet under `servers.cs2` with `type: "stdio"`; other profiles and workspace files are not edited. |
 

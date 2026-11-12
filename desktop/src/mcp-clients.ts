@@ -107,7 +107,7 @@ export function buildLaunch(execPath: string, serverFile: string, shared: Shared
 // Clients
 // ---------------------------------------------------------------------------------------------
 
-export type ClientId = "claude-desktop" | "claude-code" | "cursor" | "vscode"
+export type ClientId = "claude-desktop" | "claude-code" | "codex" | "gemini-cli" | "cursor" | "vscode"
 
 export interface ClientDefinition {
   id: ClientId
@@ -123,6 +123,8 @@ export interface ClientDefinition {
 export const CLIENTS: readonly ClientDefinition[] = [
   { id: "claude-desktop", name: "Claude Desktop", mode: "json", key: "mcpServers", typeField: false },
   { id: "claude-code", name: "Claude Code", mode: "command", key: "mcpServers", typeField: false },
+  { id: "codex", name: "Codex (OpenAI)", mode: "command", key: "mcpServers", typeField: false },
+  { id: "gemini-cli", name: "Gemini CLI", mode: "command", key: "mcpServers", typeField: false },
   { id: "cursor", name: "Cursor", mode: "json", key: "mcpServers", typeField: true },
   { id: "vscode", name: "VS Code (default profile)", mode: "json", key: "servers", typeField: true },
 ]
@@ -137,6 +139,8 @@ export interface ClientEnvironment {
   localAppData: string
   /** CLAUDE_CONFIG_DIR, which relocates Claude Code's ~/.claude.json */
   claudeConfigDir?: string
+  /** CODEX_HOME, which relocates Codex's ~/.codex folder */
+  codexHome?: string
 }
 
 export function currentEnvironment(env: Record<string, string | undefined> = process.env): ClientEnvironment {
@@ -146,6 +150,7 @@ export function currentEnvironment(env: Record<string, string | undefined> = pro
     appData: env.APPDATA || join(home, "AppData", "Roaming"),
     localAppData: env.LOCALAPPDATA || join(home, "AppData", "Local"),
     claudeConfigDir: env.CLAUDE_CONFIG_DIR || undefined,
+    codexHome: env.CODEX_HOME || undefined,
   }
 }
 
@@ -180,6 +185,8 @@ export const realFs: FsProbe = {
  *                   Microsoft Store (MSIX) installs read a virtualised copy instead:
  *                   %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json   (anthropics/claude-code#26073, user reports)
  *   Claude Code     user scope lives in ~/.claude.json (code.claude.com/docs/en/mcp); we only read it
+ *   Codex           ~/.codex/config.toml (CODEX_HOME relocates it), table [mcp_servers.<name>]; `codex mcp add` writes it; we only read it
+ *   Gemini CLI      ~/.gemini/settings.json, "mcpServers"; `gemini mcp add` writes it; we only read it
  *   Cursor          ~/.cursor/mcp.json                                       (cursor.com/docs/context/mcp)
  *   VS Code         %APPDATA%\Code\User\mcp.json, top-level "servers"       (code.visualstudio.com mcp docs name the "servers" key and the
  *                   "MCP: Open User Configuration" command; the folder is the default profile's user data folder)
@@ -216,6 +223,14 @@ export function locateClient(client: ClientDefinition, env: ClientEnvironment, f
         configPath,
         detected: fs.exists(configPath) || fs.exists(join(env.claudeConfigDir ?? join(env.home, ".claude"))),
       }
+    }
+    case "codex": {
+      const dir = env.codexHome ?? join(env.home, ".codex")
+      return { configPath: join(dir, "config.toml"), detected: fs.exists(dir) }
+    }
+    case "gemini-cli": {
+      const dir = join(env.home, ".gemini")
+      return { configPath: join(dir, "settings.json"), detected: fs.exists(dir) }
     }
     case "cursor":
       return { configPath: join(env.home, ".cursor", "mcp.json"), detected: fs.exists(join(env.home, ".cursor")) }
@@ -412,15 +427,67 @@ export async function writeConfigAtomically(path: string, text: string, expected
 // Claude Code (its own CLI) and copy-paste snippets
 // ---------------------------------------------------------------------------------------------
 
-/** Reads ~/.claude.json (never written) and reports our user-scope entry. */
-export function inspectClaudeCodeFile(path: string, launch: Launch | null, windows = true): Inspection | null {
+/** TOML string literals ("basic" with escapes, or 'literal') in order of appearance. */
+function tomlStrings(text: string): string[] {
+  const out: string[] = []
+  for (const match of text.matchAll(/"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'/g)) {
+    if (match[2] !== undefined) out.push(match[2])
+    else {
+      try {
+        out.push(JSON.parse(`"${match[1]}"`) as string)
+      } catch {
+        out.push(match[1])
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Looks for `[mcp_servers.cs2]` in Codex's config.toml (read only; not a TOML parser, just enough
+ * to find our table, its command / args and the names of its env variables).
+ */
+export function inspectCodexText(text: string, launch: Launch | null, windows = true): Inspection {
+  const header = new RegExp(`^[ \\t]*\\[\\s*mcp_servers\\s*\\.\\s*(?:"${SERVER_NAME}"|${SERVER_NAME})\\s*\\][ \\t]*(?:#.*)?$`, "m").exec(text)
+  if (!header) return { state: "none" }
+  const rest = text.slice(header.index + header[0].length)
+  const next = /^[ \t]*\[/m.exec(rest)
+  const body = next ? rest.slice(0, next.index) : rest
+  const commandLine = /^[ \t]*command[ \t]*=[ \t]*(.+)$/m.exec(body)
+  const command = commandLine ? (tomlStrings(commandLine[1])[0] ?? null) : null
+  const argsMatch = /^[ \t]*args[ \t]*=[ \t]*\[([\s\S]*?)\]/m.exec(body)
+  const args = argsMatch ? tomlStrings(argsMatch[1]) : []
+  const envKeys = new Set<string>()
+  const inline = /^[ \t]*env[ \t]*=[ \t]*\{([^}]*)\}/m.exec(body)
+  if (inline) for (const key of inline[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/g)) envKeys.add(key[1])
+  const envTable = new RegExp(`^[ \\t]*\\[\\s*mcp_servers\\s*\\.\\s*(?:"${SERVER_NAME}"|${SERVER_NAME})\\s*\\.\\s*env\\s*\\][ \\t]*$`, "m").exec(text)
+  if (envTable) {
+    const after = text.slice(envTable.index + envTable[0].length)
+    const stop = /^[ \t]*\[/m.exec(after)
+    for (const key of (stop ? after.slice(0, stop.index) : after).matchAll(/^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/gm)) envKeys.add(key[1])
+  }
+  const summary: EntrySummary = { command, args, envKeys: [...envKeys] }
+  const current =
+    launch !== null &&
+    command !== null &&
+    sameText(command, launch.command, windows) &&
+    args.length === launch.args.length &&
+    args.every((arg, index) => sameText(arg, launch.args[index], windows))
+  return { state: current ? "current" : "outdated", entry: summary }
+}
+
+/**
+ * Reads the config of a client with its own CLI (never written) and reports our entry.
+ * null when the file does not exist.
+ */
+export function inspectCommandClientFile(client: ClientDefinition, path: string, launch: Launch | null, windows = true): Inspection | null {
   let text: string
   try {
     text = readFileSync(path, "utf8")
   } catch {
     return null
   }
-  return inspectConfigText(text, { id: "claude-code", name: "Claude Code", mode: "command", key: "mcpServers", typeField: false }, launch, windows)
+  return client.id === "codex" ? inspectCodexText(text, launch, windows) : inspectConfigText(text, client, launch, windows)
 }
 
 /** Double quotes only when needed; works as a PowerShell or cmd argument. */
@@ -428,12 +495,12 @@ export function quoteArg(value: string) {
   return /[\s"&|<>^()%!;,]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value
 }
 
-export type SnippetTarget = "claude-code" | "json" | "vscode"
+export type SnippetTarget = "claude-code" | "codex" | "codex-toml" | "gemini-cli" | "json" | "vscode"
 
 export interface Snippet {
   target: SnippetTarget
   title: string
-  language: "powershell" | "json"
+  language: "powershell" | "json" | "toml"
   text: string
   where: string
 }
@@ -457,6 +524,43 @@ export function buildSnippet(target: SnippetTarget, launch: Launch, maskToken: b
         text: `claude mcp add ${envArgs.join(" ")} --transport stdio --scope user ${SERVER_NAME} -- ${[shown.command, ...shown.args].map(quoteArg).join(" ")}`,
       }
     }
+    case "codex": {
+      const envArgs = Object.entries(shown.env).map(([name, value]) => `--env ${quoteArg(`${name}=${value}`)}`)
+      return {
+        target,
+        title: "Codex command",
+        language: "powershell",
+        where: "Run it once in PowerShell or a command prompt. Codex CLI and the Codex IDE extension share the entry (it goes into ~/.codex/config.toml).",
+        text: `codex mcp add ${SERVER_NAME} ${envArgs.join(" ")} -- ${[shown.command, ...shown.args].map(quoteArg).join(" ")}`,
+      }
+    }
+    case "codex-toml": {
+      const str = (value: string) => JSON.stringify(value)
+      const envInline = Object.entries(shown.env).map(([name, value]) => `${name} = ${str(value)}`)
+      return {
+        target,
+        title: "Codex config.toml entry",
+        language: "toml",
+        where: "Add this table to ~/.codex/config.toml (%USERPROFILE%\\.codex\\config.toml) and restart Codex. Use it when `codex mcp add` is not available.",
+        text: [
+          `[mcp_servers.${SERVER_NAME}]`,
+          `command = ${str(shown.command)}`,
+          `args = [${shown.args.map(str).join(", ")}]`,
+          `env = { ${envInline.join(", ")} }`,
+        ].join("\n"),
+      }
+    }
+    case "gemini-cli": {
+      // -e is variadic in yargs: another option must sit between the last -e pair and the name.
+      const envArgs = Object.entries(shown.env).map(([name, value]) => `-e ${quoteArg(`${name}=${value}`)}`)
+      return {
+        target,
+        title: "Gemini CLI command",
+        language: "powershell",
+        where: "Run it once in PowerShell or a command prompt. It adds the server for every project (user scope, ~/.gemini/settings.json).",
+        text: `gemini mcp add ${envArgs.join(" ")} --scope user ${SERVER_NAME} ${[shown.command, ...shown.args].map(quoteArg).join(" ")}`,
+      }
+    }
     case "json":
       return {
         target,
@@ -476,8 +580,18 @@ export function buildSnippet(target: SnippetTarget, launch: Launch, maskToken: b
   }
 }
 
-export function claudeCodeRemoveCommand() {
-  return `claude mcp remove ${SERVER_NAME} --scope user`
+/** The CLI command that removes our server from a client with its own CLI. */
+export function removeCommandFor(clientId: ClientId): string | null {
+  switch (clientId) {
+    case "claude-code":
+      return `claude mcp remove ${SERVER_NAME} --scope user`
+    case "codex":
+      return `codex mcp remove ${SERVER_NAME}`
+    case "gemini-cli":
+      return `gemini mcp remove --scope user ${SERVER_NAME}`
+    default:
+      return null
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -6,6 +6,7 @@
  *   POST /api/desktop/setup/register         { client, shareSettings }  add our server to a client's JSON config (backup + atomic write)
  *   POST /api/desktop/setup/unregister       { client }                 remove only our server from it
  *   POST /api/desktop/setup/snippet          { target, shareSettings, copy }  text to copy for a client we do not edit
+ *                                            (target: claude-code | codex | codex-toml | gemini-cli | json | vscode)
  *   POST /api/desktop/setup/token/generate   { replace? }               new strong random token, saved as the companion's token
  *   POST /api/desktop/setup/token/copy       { as: "token" | "setx" }   puts the token / the setx command on the clipboard (main process)
  *   POST /api/desktop/setup/game-token       { confirm: true }          sets CS2MCP_TOKEN as a Windows user environment variable
@@ -28,19 +29,19 @@ import { defineFeature, type DesktopFeature } from "../context.ts"
 import {
   buildLaunch,
   buildSnippet,
-  claudeCodeRemoveCommand,
   clientById,
   CLIENTS,
   ConfigFileError,
   currentEnvironment,
   editConfigText,
   generateToken,
-  inspectClaudeCodeFile,
+  inspectCommandClientFile,
   inspectConfigText,
   locateBundledServer,
   locateClient,
   readConfigFile,
   realFs,
+  removeCommandFor,
   serverEntry,
   SERVER_NAME,
   writeConfigAtomically,
@@ -163,7 +164,7 @@ const baseVersion = (version: string) => version.split("+", 1)[0].trim()
 const registerBody = z.object({ client: z.string(), shareSettings: z.boolean().default(false) })
 const unregisterBody = z.object({ client: z.string() })
 const snippetBody = z.object({
-  target: z.enum(["claude-code", "json", "vscode"]),
+  target: z.enum(["claude-code", "codex", "codex-toml", "gemini-cli", "json", "vscode"]),
   shareSettings: z.boolean().default(false),
   copy: z.boolean().default(false),
 })
@@ -273,9 +274,18 @@ export function createSetup(overrides: Partial<SetupDeps> = {}): DesktopFeature 
         }
         try {
           if (client.mode === "command") {
-            const found = inspectClaudeCodeFile(location.configPath, launch, windows)
-            row.configExists = found !== null
-            if (found) Object.assign(row, { state: found.state, entry: found.entry ?? null })
+            // We never write these files, so one we cannot parse just shows as "not set up".
+            let found: Inspection | null = null
+            try {
+              found = inspectCommandClientFile(client, location.configPath, launch, windows)
+            } catch (err) {
+              if (!(err instanceof ConfigFileError)) throw err
+              row.configExists = true
+            }
+            if (found) {
+              row.configExists = true
+              Object.assign(row, { state: found.state, entry: found.entry ?? null })
+            }
           } else {
             const text = await readConfigFile(location.configPath)
             row.configExists = text !== null
@@ -377,7 +387,7 @@ export function createSetup(overrides: Partial<SetupDeps> = {}): DesktopFeature 
           const client = clientById(body.client)
           if (!client) throw new RouteError(400, `unknown client "${body.client}"`)
           if (client.mode !== "json") {
-            return { client: client.id, name: client.name, change: "manual", command: claudeCodeRemoveCommand(), configPath: null, backup: null }
+            return { client: client.id, name: client.name, change: "manual", command: removeCommandFor(client.id), configPath: null, backup: null }
           }
           const location = locateClient(client, currentEnvironment(deps.env), deps.fs)
           const before = await readConfigFile(location.configPath)

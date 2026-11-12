@@ -366,8 +366,9 @@ export function ClientStep({
   const urlDiffers = status.bridge.url !== "http://127.0.0.1:8642"
   const canShare = token.set || urlDiffers
 
-  const detected = status.clients.filter((client) => client.detected)
-  const missing = status.clients.filter((client) => !client.detected)
+  // Command-line tools are always listed: a CLI that was installed but never run has no settings folder yet.
+  const detected = status.clients.filter((client) => client.detected || client.mode === "command")
+  const missing = status.clients.filter((client) => !client.detected && client.mode !== "command")
 
   return (
     <div className="flex flex-col gap-4 text-sm">
@@ -409,12 +410,14 @@ export function ClientStep({
               register.mutate({ client: client.id, shareSettings: share && canShare }, { onSuccess: setLast, onError: () => setLast(null) })
             }
             onRemove={() => unregister.mutate({ client: client.id }, { onSuccess: setLast, onError: () => setLast(null) })}
-            onCopyCommand={() =>
+            onCopyCommand={() => {
+              const guide = CLI_GUIDES[client.id]
+              if (!guide) return
               snippet.mutate(
-                { target: "claude-code", shareSettings: share && canShare, copy: true },
+                { target: guide.target, shareSettings: share && canShare, copy: true },
                 { onSuccess: () => toast.success("Command copied – run it in PowerShell"), onError: (e) => toast.error(errorText(e)) }
               )
-            }
+            }}
           />
         ))}
         {detected.length === 0 && (
@@ -450,6 +453,9 @@ export function ClientStep({
                 ["json", "JSON (Claude Desktop, most clients)"],
                 ["vscode", "VS Code"],
                 ["claude-code", "Claude Code command"],
+                ["codex", "Codex command"],
+                ["codex-toml", "Codex config.toml"],
+                ["gemini-cli", "Gemini CLI command"],
               ] as const
             ).map(([id, label]) => (
               <Button
@@ -501,6 +507,52 @@ export function ClientStep({
   )
 }
 
+/** Per command-line AI tool: which snippet to copy and the plain-words steps shown under its row. */
+const CLI_GUIDES: Partial<
+  Record<
+    SetupClient["id"],
+    {
+      target: SnippetTarget
+      install: string
+      check: string
+      checkBinary: string
+      list: string
+      remove: string
+      restart: string
+      altTarget?: boolean
+    }
+  >
+> = {
+  "claude-code": {
+    target: "claude-code",
+    install: "npm install -g @anthropic-ai/claude-code, or the installer from code.claude.com",
+    check: "claude --version",
+    checkBinary: "claude",
+    list: "claude mcp list",
+    remove: "claude mcp remove cs2 --scope user",
+    restart: "Start a new Claude Code session (or run /mcp inside a running one) so it picks the server up.",
+  },
+  codex: {
+    target: "codex",
+    install: "npm install -g @openai/codex",
+    check: "codex --version",
+    checkBinary: "codex",
+    list: "codex mcp list",
+    remove: "codex mcp remove cs2",
+    restart: "Start a new Codex session; the CLI and the Codex IDE extension both read ~/.codex/config.toml.",
+    altTarget: true,
+  },
+  "gemini-cli": {
+    target: "gemini-cli",
+    install: "npm install -g @google/gemini-cli",
+    check: "gemini --version",
+    checkBinary: "gemini",
+    list: "gemini mcp list",
+    remove: "gemini mcp remove --scope user cs2",
+    restart: "Start a new Gemini CLI session (/mcp inside it lists connected servers).",
+  },
+}
+
 const CHANGE_TEXT: Record<Exclude<RegisterResult["change"], "manual">, string> = {
   added: "added",
   updated: "updated",
@@ -522,6 +574,7 @@ function ClientRow({
   onCopyCommand: () => void
 }) {
   const badge = STATE_BADGE[client.state]
+  const guide = CLI_GUIDES[client.id]
   return (
     <li className="flex flex-col gap-2 rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -556,10 +609,35 @@ function ClientRow({
           </>
         ) : (
           <>
-            Claude Code is configured with its own command – run the copied command once in PowerShell. It is registered for every project{client.state !== "none" ? " (an entry named cs2 exists already; the command replaces it after you remove the old one with: claude mcp remove cs2 --scope user)" : ""}.
+            {client.name} is configured with its own command – copy it and run it once in PowerShell. It is registered for every project
+            {client.state !== "none" && guide
+              ? ` (an entry named cs2 exists already; remove the old one first with: ${guide.remove})`
+              : ""}
+            .
           </>
         )}
       </p>
+      {client.mode === "command" && guide && (
+        <details className="rounded-md border bg-muted/30 p-2.5 text-xs">
+          <summary className="cursor-pointer font-medium">Step by step for {client.name}</summary>
+          <Steps>
+            <li>
+              Install {client.name} if you have not ({guide.install}). Open a terminal (PowerShell) and check it runs: <Code>{guide.check}</Code>
+            </li>
+            <li>
+              Press <strong>Copy command</strong> above, paste it into the terminal and press Enter.
+              {guide.altTarget && <> No <Code>{guide.checkBinary}</Code> command? Use "Another client, or do it by hand" below to get the config file entry instead.</>}
+            </li>
+            <li>
+              Check that it is registered: <Code>{guide.list}</Code> – <Code>cs2</Code> should be in the list.
+            </li>
+            <li>{guide.restart}</li>
+            <li>
+              Load a save in Cities: Skylines II and ask it about your city. To undo this: <Code>{guide.remove}</Code>
+            </li>
+          </Steps>
+        </details>
+      )}
       {client.note && <p className="text-xs text-muted-foreground">{client.note}</p>}
       {client.problem && <p className="text-xs text-destructive">{client.problem}</p>}
       {client.state === "outdated" && client.entry && (

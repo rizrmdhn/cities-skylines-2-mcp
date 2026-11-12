@@ -26,7 +26,7 @@ export type GameTokenState = "unsupported" | "unknown" | "unset" | "set" | "matc
 export type ClientEntryState = "none" | "current" | "outdated" | "unreadable"
 
 export interface SetupClient {
-  id: "claude-desktop" | "claude-code" | "cursor" | "vscode"
+  id: "claude-desktop" | "claude-code" | "codex" | "gemini-cli" | "cursor" | "vscode"
   name: string
   /** "json": the companion edits the file. "command": the client has its own CLI. */
   mode: "json" | "command"
@@ -67,12 +67,12 @@ export interface SetupStatus {
   clients: SetupClient[]
 }
 
-export type SnippetTarget = "claude-code" | "json" | "vscode"
+export type SnippetTarget = "claude-code" | "codex" | "codex-toml" | "gemini-cli" | "json" | "vscode"
 
 export interface SetupSnippet {
   target: SnippetTarget
   title: string
-  language: "powershell" | "json"
+  language: "powershell" | "json" | "toml"
   /** The token, when included, is masked in this text. */
   text: string
   where: string
