@@ -1,5 +1,6 @@
 import type { Camera } from "@/lib/bridge-types"
 import type { RoadNetwork } from "@/features/map/use-roads"
+import { cameraFootprint } from "@/lib/camera"
 import type { HistoryMarker } from "@/lib/history-markers"
 import type { Selection } from "@/lib/selection"
 import {
@@ -183,8 +184,55 @@ function drawMarkers(ctx: CanvasRenderingContext2D, scene: MapScene) {
   }
 }
 
+/** The ground the camera roughly shows (see lib/camera.ts for what is assumed). */
+function drawCameraFootprint(ctx: CanvasRenderingContext2D, scene: MapScene, camera: Camera) {
+  const area = cameraFootprint(camera)
+  if (!area) return
+  ctx.save()
+  ctx.beginPath()
+  area.forEach((corner, i) => {
+    const p = worldToScreen(corner, scene.view, scene.size)
+    if (i === 0) ctx.moveTo(p.x, p.y)
+    else ctx.lineTo(p.x, p.y)
+  })
+  ctx.closePath()
+  ctx.fillStyle = "rgba(232, 121, 249, 0.14)"
+  ctx.fill()
+  ctx.setLineDash([6, 4])
+  ctx.lineJoin = "round"
+  ctx.strokeStyle = MAP_COLOURS.casing
+  ctx.lineWidth = 3.5
+  ctx.stroke()
+  ctx.strokeStyle = MAP_COLOURS.camera
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  ctx.restore()
+}
+
 function drawCamera(ctx: CanvasRenderingContext2D, scene: MapScene, camera: Camera) {
+  drawCameraFootprint(ctx, scene, camera)
   const p = worldToScreen(camera.pivot, scene.view, scene.size)
+
+  // Where the camera itself hovers (it sits behind and above the point it looks at).
+  const eye = worldToScreen({ x: camera.position.x, z: camera.position.z }, scene.view, scene.size)
+  if (Math.hypot(eye.x - p.x, eye.y - p.y) > 12) {
+    ctx.save()
+    ctx.setLineDash([3, 4])
+    ctx.strokeStyle = MAP_COLOURS.camera
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(eye.x, eye.y)
+    ctx.lineTo(p.x, p.y)
+    ctx.stroke()
+    ctx.restore()
+    ctx.fillStyle = MAP_COLOURS.casing
+    ctx.strokeStyle = MAP_COLOURS.camera
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(eye.x, eye.y, 4, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+  }
   // angle.x is the compass heading in degrees; 0 looks along +z (up on the map)
   const heading = (camera.angle.x * Math.PI) / 180
   const dx = Math.sin(heading)

@@ -86,7 +86,9 @@ export const cameraQuery = (follow: boolean) =>
   queryOptions({
     queryKey: queryKeys.camera,
     queryFn: ({ signal }) => apiGet<Camera>("/camera", {}, signal),
+    // Quick only while the map follows the camera; never while the tab or window is hidden.
     refetchInterval: follow ? 1_000 : 5_000,
+    refetchIntervalInBackground: false,
   })
 
 /** Not polled: a grid can hold hundreds of thousands of values and is read on the game's main thread. */
