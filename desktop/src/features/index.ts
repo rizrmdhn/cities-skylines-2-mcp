@@ -7,3 +7,4 @@
  * Features must not depend on that order: use ctx.onReady for work that needs other features.
  */
 export { default as settingsApi } from "./settings-api.ts"
+export { default as trends } from "./trends.ts"
