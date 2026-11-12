@@ -17,6 +17,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { OverlayButton } from "@/features/overlay/overlay-button"
+import { FirstRunRedirect } from "@/features/setup/first-run-redirect"
 import { useConnection } from "@/lib/connection"
 import { useDesktop } from "@/lib/desktop"
 import type { RouterContext } from "@/router"
@@ -62,12 +63,17 @@ function NavLinks() {
 }
 
 /** Routes that fill a window of their own and must not get the app header and connection alerts. */
-const BARE_ROUTES = ["/overlay"] as const
+const BARE_ROUTES = ["/overlay", "/setup"] as const
 
 function RootLayout() {
   const matchRoute = useMatchRoute()
-  if (BARE_ROUTES.some((to) => matchRoute({ to }))) return <Outlet />
-  return <AppShell />
+  const bare = BARE_ROUTES.some((to) => matchRoute({ to }))
+  return (
+    <>
+      <FirstRunRedirect />
+      {bare ? <Outlet /> : <AppShell />}
+    </>
+  )
 }
 
 function AppShell() {

@@ -9,4 +9,5 @@
  */
 export { default as notifications } from "./notifications"
 export { default as overlay } from "./overlay"
+export { default as setup } from "./setup"
 export { default as tray } from "./tray"
