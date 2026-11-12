@@ -121,7 +121,10 @@ export function createRouteRegistry({ log }: { log?: Logger } = {}): RouteRegist
         return jsonResponse(200, JSON.stringify(result === undefined ? { ok: true } : result))
       } catch (err) {
         if (err instanceof RouteError) return errorResponse(err.status, "companion", err.message)
-        if (err instanceof SettingsValidationError) return errorResponse(400, "companion", err.message)
+        if (err instanceof SettingsValidationError) {
+          // `issues` lets the settings page put each message next to its field.
+          return jsonResponse(400, { error: err.message, status: 400, kind: "companion", issues: err.fields })
+        }
         if (err instanceof z.ZodError) return errorResponse(400, "companion", zodIssues(err))
         log?.error(`${raw.method} ${raw.pathname} failed`, err)
         return errorResponse(500, "companion", `${raw.method} ${raw.pathname} failed; see the desktop log`)
