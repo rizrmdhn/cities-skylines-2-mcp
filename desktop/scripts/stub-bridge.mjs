@@ -212,7 +212,9 @@ export function startStubBridge(port = 0, { cityName = CITY_NAME } = {}) {
       return send(res, 200, { paused: sim.selectedSpeed <= 0, selectedSpeed: sim.selectedSpeed })
     }
 
-    let body = req.method === "GET" ? FIXTURES[path] : undefined
+    const limit = Number(searchParams.get("limit") ?? Infinity)
+    let body =
+      req.method !== "GET" ? undefined : path === "/history" ? historyPayload(history, limit) : FIXTURES[path]
     if (body && cityName !== CITY_NAME && "cityName" in body) body = { ...body, cityName }
     const paused = sim.selectedSpeed <= 0
     if (body && path === "/state") {
