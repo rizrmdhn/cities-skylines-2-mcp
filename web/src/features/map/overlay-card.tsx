@@ -12,6 +12,7 @@ import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@
 import { Switch } from "@/components/ui/switch"
 import type { Camera } from "@/lib/bridge-types"
 import { MAP_COLOURS } from "@/features/map/draw"
+import { cameraHeading, compassLabel } from "@/lib/camera"
 
 function Swatch({ colour, label }: { colour: string; label: string }) {
   return (
@@ -27,6 +28,8 @@ export function OverlayCard({
   markers,
   follow,
   camera,
+  indicator,
+  onIndicatorChange,
   onRoadsChange,
   onReloadRoads,
   onMarkersChange,
@@ -37,6 +40,8 @@ export function OverlayCard({
   markers: boolean
   follow: boolean
   camera: Camera | undefined
+  indicator: boolean
+  onIndicatorChange: (on: boolean) => void
   onRoadsChange: (on: boolean) => void
   onReloadRoads: () => void
   onMarkersChange: (on: boolean) => void
@@ -84,8 +89,23 @@ export function OverlayCard({
                   ? `Looking at x ${Math.round(camera.pivot.x)}, z ${Math.round(camera.pivot.z)}`
                   : "Camera position unavailable"}
               </FieldDescription>
+              {camera && (
+                <FieldDescription data-testid="camera-details">
+                  {`Facing ${compassLabel(cameraHeading(camera))} (${Math.round(cameraHeading(camera))}°), tilted ${Math.round(camera.angle.y)}°, ${Math.round(camera.zoom)} m away, at x ${Math.round(camera.position.x)}, z ${Math.round(camera.position.z)}, ${Math.round(camera.position.y)} m high`}
+                </FieldDescription>
+              )}
+              <FieldDescription>Dragging or zooming the map stops following.</FieldDescription>
             </FieldContent>
             <Switch id="overlay-follow" checked={follow} onCheckedChange={onFollowChange} />
+          </Field>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="overlay-camera">Camera indicator</FieldLabel>
+              <FieldDescription className="flex flex-wrap gap-x-3">
+                <Swatch colour={MAP_COLOURS.camera} label="camera, view direction and the ground in view (approximate)" />
+              </FieldDescription>
+            </FieldContent>
+            <Switch id="overlay-camera" checked={indicator} onCheckedChange={onIndicatorChange} />
           </Field>
         </FieldGroup>
         <div className="mt-4 flex flex-wrap gap-2">

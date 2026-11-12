@@ -59,6 +59,7 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 | `src/core-routes.ts` | `GET /api/desktop/info` | no |
 | `src/testing.ts` | `createTestContext()` for Node tests | no |
 | `src/features/index.ts` | **the registration list** | — |
+| `src/features/save-file.ts` | built-in feature: `POST /api/desktop/save-file`, a native "Save as" dialog for files the page generated (PNG export) | lazily, only when saving |
 | `src/features/settings-api.ts` | built-in feature: `GET/POST /api/desktop/settings` | no |
 | `src/features/app-folders.ts` | built-in feature: opens the log / settings folder (settings page, About) | lazily, only when opening |
 | `src/features/tray.ts` | tray icon, status tooltip, control menu, close-to-tray (see "System tray") | no (Electron loaded lazily) |
@@ -68,7 +69,7 @@ Modules marked "no" must stay importable in plain Node: tests load them. Import 
 
 ### Window and renderer hardening
 
-Every window (main and feature windows) gets `contextIsolation`, `sandbox`, no `nodeIntegration`, no `<webview>`, no preload, devtools only when not packaged. App-wide: navigation and redirects away from `app://cs2mcp` are cancelled in every frame (http(s) targets open in the system browser instead; other schemes are dropped and logged), `window.open` never creates a window, permission requests/checks are denied except `clipboard-sanitized-write` (the map's "copy prompt" button). HTML responses carry this CSP (`app-protocol.ts`):
+Every window (main and feature windows) gets `contextIsolation`, `sandbox`, no `nodeIntegration`, no `<webview>`, no preload, devtools only when not packaged. App-wide: navigation and redirects away from `app://cs2mcp` are cancelled in every frame (http(s) targets open in the system browser instead; other schemes are dropped and logged), `window.open` never creates a window, permission requests/checks are denied except `clipboard-sanitized-write` (the map's "copy prompt" button and the export card's "Copy image": `navigator.clipboard.write` of a PNG is a sanitized write, so no wider permission was added). HTML responses carry this CSP (`app-protocol.ts`):
 
 ```
 default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;
@@ -109,9 +110,15 @@ The renderer calls `fetch("/api/desktop/<name>")` — GET for reads, POST with a
 | `GET /api/desktop/app-folders` | `{ "logs": "<path>", "settings": "<path>" }`, the fixed folders (feature `app-folders`) |
 | `POST /api/desktop/app-folders/open-logs`, `.../open-settings` | opens that folder in the file manager; takes no path (the body is ignored); 500 with the shell's message when it cannot |
 
+| `POST /api/desktop/save-file` | body `{ "name": "Riverside-land-value-2026-03-14.png", "data": "<base64>" }` → `{ "status": "saved", "path": "<file>" }` after the user picked a place, or `{ "status": "cancelled" }` (feature `save-file`, below) |
+
 A refused `POST /api/desktop/settings` also carries `issues`, one entry per rejected key, so a page can put each message next to its field: `{ "error": "bridgeUrl: must be an http:// or https:// URL", "status": 400, "kind": "companion", "issues": [{ "key": "bridgeUrl", "message": "must be an http:// or https:// URL" }] }` (`key: null` when the body as a whole is wrong; `ApiError.body` holds it on the web side).
 
 The bridge proxy on `/api/<bridge route>`: GET on the read allowlist, plus the one control route `POST /api/sim/control?speed=0..8&paused=true|false` (pause / resume / speed buttons in the header, `web/src/components/sim-controls.tsx`); both lists live in `web/server/routes.ts`, which documents how to add a control route. `apiControl()` in `web/src/lib/api.ts` is the web side of it. Every other POST is refused with 405 before the bridge.
+
+### Saving files (feature `save-file`, `web/src/lib/download.ts`)
+
+Pages save generated files with `downloadBlob(blob, filename): Promise<{ status: "saved"; path?: string } | { status: "cancelled" }>` from `web/src/lib/download.ts`. In a browser it clicks a hidden `<a download>` on a Blob URL. In the desktop app (`/api/desktop/info` lists `save-file`) it sends the bytes as base64 JSON (the route registry takes JSON bodies only) to `POST /api/desktop/save-file`, and the main process shows `dialog.showSaveDialog` on the main window with the file name filled in, opening in the folder used last time (setting `save-file.lastFolder`, not exposed) or, the first time, in Pictures (Downloads for non-image types). Why not leave it to `<a download>`: the renderer has no preload, so the page could not learn whether the user saved or cancelled, and the default dialog would not be ours to shape (start folder, remembered folder, file-type filter). The page never chooses a path: directories in `name` are stripped, only `.png .jpg .webp .svg .csv .json .txt` are written (also checked on the name the user typed), one dialog at a time (409), at most 256 MB (413), a write failure is a 500 with the system's message. Failures reach the caller as `ApiError`, which the export card shows as an error toast. `CS2MCP_DESKTOP_SAVE_DIR=<folder>` skips the dialog and writes into that folder (for scripted runs); it does not update the remembered folder.
 
 ### Web side (`web/src/lib/`)
 
@@ -177,6 +184,10 @@ A tray icon that shows whether the companion reaches the game, plus a small menu
 - Exports for tests and reuse: `probeBridge(bridge)`, `buildMenu`, `tooltipFor`, `statusLine`, `iconFor`, `nextDelayMs`, `createTray(viewFactory)` (inject a fake `TrayView`; the default factory loads Electron lazily).
 
 Settings (also in `GET/POST /api/desktop/settings`): `tray.closeToTray`; the System tray card of the Settings page has the switch (`web/src/features/settings/sections/tray.tsx`).
+
+## The map in the desktop app
+
+The map page (`/map`) works the same in the browser companion and here; two things use desktop features. **Export image** (`web/src/features/map/export-card.tsx`, `export-image.ts`, geometry in `web/src/lib/map-export.ts`) renders the map again at 1×, 2× or 4× through the same `drawMap` as the screen (this view, the built-up area or the whole map; light/dark caption strip or transparent without one) and saves it with `downloadBlob` (native dialog, above) or copies it with `navigator.clipboard.write`. **Follow game camera** polls `/camera` every second while on (every 5 s otherwise, and not at all while the window is hidden), glides the map to the camera's look-at point, and switches itself off when the map is panned or zoomed by hand (a "Follow camera" button on the map turns it back on). The stub bridge (`scripts/stub-bridge.mjs`) answers `/camera`, `/city/gridmap` and `/city/road-network` with made-up data so both can be tried without the game.
 
 ## Adding a feature
 

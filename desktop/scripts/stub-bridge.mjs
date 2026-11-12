@@ -15,6 +15,10 @@
  * refused requests, positions on the map), timed relative to now so the newest session is "live".
  * Tests can replace it: `stub.setHistory(entriesNewestFirst)` (the bridge's order).
  *
+ * For the map it also answers /camera, /city/gridmap (every layer, a smooth made-up field) and
+ * /city/road-network (a street grid with a ring road and a diagonal avenue around the origin,
+ * mixed traffic flow, some traffic lights and roundabouts).
+ *
  *   node scripts/stub-bridge.mjs [port]     run it on its own (default port: any free one)
  *   import { startStubBridge } from "./stub-bridge.mjs"
  */
@@ -218,6 +222,73 @@ export function cityAt(frame) {
   }
 }
 
+/** The world is -7168..7168 m; the map shows it as a square and the grid is 32 x 32 cells. */
+const WORLD_HALF = 7168
+const GRID_SIZE = 32
+
+/** A smooth field in 0..1 per layer, so each layer looks different on the map. */
+function gridField(layer, x, z) {
+  const seeds = { landValue: 0, groundPollution: 1, airPollution: 2, noisePollution: 3, groundWater: 4, groundWaterPollution: 5 }
+  const k = seeds[layer] ?? 0
+  const near = Math.exp(-((x - 300) ** 2 + (z + 200) ** 2) / (2 * 1800 ** 2))
+  const wave = 0.5 + 0.5 * Math.sin((x + k * 900) / 1500 + Math.cos((z - k * 500) / 1100))
+  return k === 0 || k === 3 ? near : 0.65 * wave + 0.35 * near
+}
+
+function gridmap(layer) {
+  const cell = (WORLD_HALF * 2) / GRID_SIZE
+  const values = []
+  for (let row = 0; row < GRID_SIZE; row++) {
+    for (let col = 0; col < GRID_SIZE; col++) {
+      const x = -WORLD_HALF + (col + 0.5) * cell
+      const z = -WORLD_HALF + (row + 0.5) * cell
+      values.push(Math.round(gridField(layer, x, z) * 1000) / 10)
+    }
+  }
+  return { layer, textureSize: GRID_SIZE, worldMin: -WORLD_HALF, worldMax: WORLD_HALF, cellSize: cell, unit: "stub units", values }
+}
+
+/** Street grid (150 m blocks), a ring road and a diagonal avenue: roads are [sx, sz, mx, mz, ex, ez, flow, flags]. */
+function roadNetwork() {
+  const roads = []
+  const junctions = []
+  const flow = (x, z) => Math.round(25 + 75 * (0.5 + 0.5 * Math.sin(x / 260) * Math.cos(z / 310)))
+  const add = (ax, az, bx, bz, curve = 0) => {
+    const mx = (ax + bx) / 2 - ((bz - az) * curve)
+    const mz = (az + bz) / 2 + ((bx - ax) * curve)
+    roads.push([ax, az, mx, mz, bx, bz, flow(mx, mz), 0])
+  }
+  const lines = [-900, -750, -600, -450, -300, -150, 0, 150, 300, 450, 600, 750, 900]
+  for (const a of lines) {
+    for (let i = 0; i < lines.length - 1; i++) {
+      add(lines[i], a, lines[i + 1], a)
+      add(a, lines[i], a, lines[i + 1])
+    }
+  }
+  for (let i = 0; i < 36; i++) {
+    const t0 = (i / 36) * Math.PI * 2
+    const t1 = ((i + 1) / 36) * Math.PI * 2
+    add(Math.cos(t0) * 1300, Math.sin(t0) * 1300, Math.cos(t1) * 1300, Math.sin(t1) * 1300, 0.01)
+  }
+  for (let d = -1300; d < 1300; d += 260) add(d, d * 0.6, d + 260, (d + 260) * 0.6)
+  for (const x of lines) {
+    for (const z of lines) {
+      const n = Math.abs(x * 7 + z * 13) % 5
+      if (n === 0) junctions.push([x, z, 1])
+      else if (n === 1 && x % 300 === 0) junctions.push([x, z, 2])
+    }
+  }
+  junctions.push([1300, 0, 4], [-1300, 0, 4])
+  return { roadCount: roads.length, junctionCount: junctions.length, roads, junctions }
+}
+
+const CAMERA = {
+  pivot: { x: 150, y: 35, z: -100 },
+  position: { x: -180, y: 520, z: -820 },
+  angle: { x: 25, y: 45 },
+  zoom: 740,
+}
+
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { "Content-Type": "application/json", ...headers })
   res.end(JSON.stringify(body))
@@ -270,6 +341,9 @@ export function startStubBridge(port = 0, { cityName = CITY_NAME } = {}) {
     const limit = Number(searchParams.get("limit") ?? Infinity)
     let body =
       req.method !== "GET" ? undefined : path === "/history" ? historyPayload(history, limit) : FIXTURES[path]
+    if (req.method === "GET" && path === "/camera") body = CAMERA
+    else if (req.method === "GET" && path === "/city/gridmap") body = gridmap(searchParams.get("layer") ?? "landValue")
+    else if (req.method === "GET" && path === "/city/road-network") body = roadNetwork()
     if (body && cityName !== CITY_NAME && "cityName" in body) body = { ...body, cityName }
     const paused = sim.selectedSpeed <= 0
     const city = cityAt(sim.frame)

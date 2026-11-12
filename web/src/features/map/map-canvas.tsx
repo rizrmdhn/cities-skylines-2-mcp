@@ -43,7 +43,7 @@ export interface MapCanvasProps {
   onHover: (point: WorldPoint | undefined) => void
 }
 
-function createHeatmap(grid: GridMap): HTMLCanvasElement | null {
+export function createHeatmap(grid: GridMap): HTMLCanvasElement | null {
   if (grid.textureSize <= 0) return null
   const canvas = document.createElement("canvas")
   canvas.width = grid.textureSize
