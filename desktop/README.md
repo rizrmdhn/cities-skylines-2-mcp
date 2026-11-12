@@ -64,6 +64,7 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 | `src/features/app-folders.ts` | built-in feature: opens the log / settings folder (settings page, About) | lazily, only when opening |
 | `src/features/tray.ts` | tray icon, status tooltip, control menu, close-to-tray (see "System tray") | no (Electron loaded lazily) |
 | `src/features/trends.ts` | trend recorder + `/api/desktop/trends*` (see "Trend history") | no |
+| `src/features/notifications.ts` | native notifications driven by background polling + `/api/desktop/notifications*` (see "Notifications") | no (Electron loaded lazily) |
 
 Modules marked "no" must stay importable in plain Node: tests load them. Import Electron only with `import type` there.
 
@@ -184,6 +185,40 @@ A tray icon that shows whether the companion reaches the game, plus a small menu
 - Exports for tests and reuse: `probeBridge(bridge)`, `buildMenu`, `tooltipFor`, `statusLine`, `iconFor`, `nextDelayMs`, `createTray(viewFactory)` (inject a fake `TrayView`; the default factory loads Electron lazily).
 
 Settings (also in `GET/POST /api/desktop/settings`): `tray.closeToTray`; the System tray card of the Settings page has the switch (`web/src/features/settings/sections/tray.tsx`).
+
+## Notifications (`src/features/notifications.ts`)
+
+Native Windows notifications (Electron `Notification`, shown under the app's AppUserModelID) for what happens while the companion is not in front. A background poller, running whether or not a window is open, feeds small trackers; every tracker is a plain function of its observations plus an injected clock, exported for tests. The Electron part is behind `NotifierView` (`createNotifications(factory)`; the default factory loads Electron lazily).
+
+**Events.** Each has its own switch (`notifications.<name>`, all default on):
+
+| event (`kind`) | when | notification |
+| --- | --- | --- |
+| `connection` | the bridge became unreachable ("Lost connection to the game", or "rejected the token" for a 401) or reachable again ("Connected to the game") | click: `/` (`/settings` for a rejected token) |
+| `cityLoaded` | a city was loaded while the bridge was already reachable, or another one replaced it | click: `/` |
+| `warnings` | a type from `/city/notifications` newly appears or grows (rules below). Every type that qualifies in one poll goes into **one** notification: "Electricity: 12 warnings" for one type, "3 new city warnings" with a line per type for several | click: `/` |
+| `aiActivity` | a burst of AI actions ended: "AI made 5 changes, spent ¢64,000", body "road connect × 3, zone set × 2 in Riverside" | click: `/activity?session=<key>` |
+| `aiFailures` | the same burst had failed actions: "2 AI actions failed", body "road connect (400), …" plus the first error text | click: `/activity?session=<key>&status=failed` |
+| `spendingLimit` | `spendingLimitRemaining` fell under `notifications.spendingLimitPercent` of `spendingLimit` ("almost reached"), and again at 0 ("reached") | click: `/` |
+| `forcedPause` | `/state` reports `forcedPause: "popup"` for `notifications.popupSeconds`, once per popup; it blocks AI control | click: `/` |
+
+**Rules.**
+- *Debounce (connection, city).* A change of the bridge's state (down / reachable without a city / city `<name>`) is announced only when every poll for `notifications.connectionDelaySeconds` (default 20 s) saw it. A loading game is neutral and cancels a pending change, so a restart or a loading screen announces nothing but the state it ends in; the first observation after start is a silent baseline (starting the companion with the game running says nothing). The first reachable state after an outage is "Connected" (kind `connection`, mentions the city when one is loaded); a city that loads later is `cityLoaded`. At least 60 s between two `connection` toasts, 30 s between two `cityLoaded`, 60 s between two `forcedPause`.
+- *Warnings.* Per type, against a reference count (the count when last announced, or when first seen): announce when the count is at or above `notifications.warningThreshold` (default 10) and the reference was below it (new, or crossed), or when the count is at least 1.5x the reference and `threshold` more; at most once per `notifications.warningCooldownMinutes` (default 15) per type. Fires, disasters, collapsed or destroyed buildings (name matches `fire|burn|destroy|collaps|flood|disaster|tornado|earthquake|tsunami|evacuat`) use a threshold of 1. Warnings that already exist when the poller starts (or when a city loads) are only the baseline, not news; a count that falls lowers its reference, so growth from the lower level is news again. Polled every 60 s.
+- *AI activity.* New `/history` entries (identity `id|timeUtc|path`, since ids restart with the game) join a burst. The burst is reported when nothing new arrived for 20 s and no batch is running (`batchRunning`), or after 5 minutes of continuous activity. A batch's parts count as the changes and its own entry's money covers the parts (the rule of `web/src/lib/sessions.ts`); a batch request counts only when it failed. "Spent" is the sum of the steps that cost money. The key for the click is `<first entry id>-<its start in unix seconds>` of the session the burst's newest entry belongs to (a 15 minute pause, or ids going backwards, starts a new session): what the activity page takes as `?session=`. Entries already in the log when the poller starts, or when a city loads, are the baseline. Money is written with the app's `¢`.
+- *Quiet mode and focus.* `notifications.enabled` is the master switch. `notifications.quiet` shows nothing. `notifications.suppressWhenFocused` (default on) shows nothing while the main window is visible, not minimized and focused. In each of these states **the poller sends no requests at all** (it only re-checks locally every 5 s) and drops its baselines, so what happened meanwhile is not announced when it wakes up. The same goes when every event switch is off. The test notification ignores all of it.
+- *Clicking* shows (or creates) the main window and, when it is not already on that URL, loads `app://cs2mcp<route>` into it (`ctx.showMainWindow()` + `loadURL(appUrl(route))`).
+
+**Polling, and why it is not shared.** The context has no shared poll, and sharing the tray's or the recorder's would mean reshaping features that other work is changing, so this feature has its own timer. It asks `GET /state` only (not `/ping`), every 10 s while a city is loaded and every 15 s otherwise (bridge down: 10 s doubling to 60 s), and, while a city is loaded, `GET /history?limit=200` on every round (skipped when none of `aiActivity`, `aiFailures`, `spendingLimit` is on) and `GET /city/notifications` every 60 s (skipped when `warnings` is off). The requests of a round go one after the other (the bridge answers on the game's main thread). On top of the tray (`/ping` + `/state` every 5 s) and `history-archive` (`/city/overview` + `/history` every 30 s) that is about 0.2 requests per second while the companion is in the background, and nothing while you look at it.
+
+**Log and routes.**
+
+| route | answer |
+| --- | --- |
+| `GET /api/desktop/notifications` | `{ supported, enabled, quiet, suppressWhenFocused, sleeping, status: { link, city, checkedAt }, notifications: [{ id, at, kind, title, body, route, shown, suppressed, clicked }] }`. The last 50 (in memory, newest first), shown or not: `suppressed` is `null`, `quiet`, `focused`, `cooldown`, `unsupported` or `error` (a kind whose switch is off is not logged). `sleeping` says why the poller is idle: `disabled`, `quiet`, `focused` or `nothing-selected`. `supported` is `null` until Electron was asked. |
+| `POST /api/desktop/notifications/test` | shows a sample notification whatever the switches say; `{ shown: true, id }`; 503 when the system has no notifications, 500 when it refuses. Windows may still hide it (Focus assist / Do not disturb). |
+
+Settings (also in `GET/POST /api/desktop/settings`): `notifications.enabled`, `.quiet`, `.suppressWhenFocused`, the seven event switches `.connection`, `.cityLoaded`, `.warnings`, `.aiActivity`, `.aiFailures`, `.spendingLimit`, `.forcedPause`, and the numbers `.warningThreshold` (10, 1 to 100000), `.warningCooldownMinutes` (15, 1 to 1440), `.spendingLimitPercent` (20, 1 to 100), `.popupSeconds` (30, 5 to 600), `.connectionDelaySeconds` (20, 5 to 300). The Notifications card of the Settings page (`web/src/features/settings/sections/notifications.tsx`) edits all of them, has the "Send test notification" button and lists the last five notifications.
 
 ## The map in the desktop app
 
@@ -475,7 +510,7 @@ Behaviour you get for free: optimistic update with rollback of just that key whe
 - **Tray / close to tray**: done, see "System tray". The recipe it follows: `ctx.onWindowAllClosed(() => "keep-running")` and hide instead of closing:
   `ctx.onMainWindowCreated((win) => win.on("close", (e) => { if (!ctx.isQuitting()) { e.preventDefault(); win.hide() } }))`. Tray "Open" → `ctx.showMainWindow()`, "Quit" → `ctx.quit()`. Icon: `ctx.paths.icon` (or files you add under `assets/`, copied to `dist/assets`).
 - **Overlay window**: `ctx.createWindow({ route: "/overlay", width: 360, height: 220, alwaysOnTop: true, frame: false, skipTaskbar: true })`. The page is a normal TanStack route in `web/src/routes/` (the SPA fallback serves it). Global hotkey: `globalShortcut.register` in `onReady`, `globalShortcut.unregisterAll()` in `onBeforeQuit`.
-- **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable (`ctx.bridge.get` is GET only; `ctx.bridge.control` sends a control POST through the same allowlist, for explicit user actions only). Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core.
+- **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable (`ctx.bridge.get` is GET only; `ctx.bridge.control` sends a control POST through the same allowlist, for explicit user actions only). Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core. Done for notifications, see "Notifications".
 - **Start with Windows / hidden start**: `app.setLoginItemSettings({ openAtLogin, args: ["--hidden"] })`; with `--hidden` the main window is not created (`ctx.launch.hidden`), so pair it with the tray. In dev, the login item would start bare `electron.exe`: only enable it when `ctx.isPackaged`. Define the boolean setting `startup.openAtLogin` and the tray menu shows a "Start with Windows" checkbox for it.
 - **Settings page**: exists (see "The settings page and adding a settings section"); give your feature a section there instead of a page of your own.
 - **Packaging / auto-update**: package `dist/**` and `package.json` (`main` is `dist/main.cjs`); icon `assets/icon.ico`; app id `com.cs2mcp.companion`, product name from `productName`. Nothing else is needed at runtime. Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
