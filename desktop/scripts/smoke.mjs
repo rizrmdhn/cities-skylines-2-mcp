@@ -8,6 +8,9 @@
  *   - GET /api/desktop/info answers desktop: true with the app version
  *   - POST /api/build/road is refused and never reaches the bridge
  *   - /api/desktop/settings never contains the token; POSTing a setting works
+ *   - the header's speed buttons: a real click reaches the stub as POST /sim/control (token, validated
+ *     parameters, the app's own Origin) and the UI shows the new speed; invalid control calls and
+ *     other POSTs are refused before the bridge
  *   - navigating away from app://cs2mcp is blocked
  * then closes the app and checks it quit cleanly. Never talks to a real bridge on port 8642.
  *
@@ -222,6 +225,54 @@ try {
     }).then((r) => r.status)`)
   check("POST /api/desktop/settings refuses an invalid value", invalid === 400, `HTTP ${invalid}`)
 
+  // The header's speed buttons, clicked with real mouse events.
+  const buttonState = `(() => {
+      const button = document.querySelector('[aria-label="8× max speed"]')
+      return button && { pressed: button.getAttribute("aria-pressed"), badge: document.body.innerText.includes("8× speed (max)") }
+    })()`
+  const clickCenter = async (label) => {
+    const point = await cdp.evaluate(`(() => {
+        const rect = document.querySelector('[aria-label="${label}"]').getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      })()`)
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+      await cdp.send("Input.dispatchMouseEvent", { type, ...point, button: "left", clickCount: 1 })
+    }
+  }
+  const initial = await waitFor("the speed controls", () => cdp.evaluate(buttonState))
+  check("the header shows the speed controls, 8× not pressed", initial.pressed === "false", JSON.stringify(initial))
+  await clickCenter("8× max speed")
+  const control = await waitFor("the speed POST to reach the bridge", () =>
+    stub.requests.find((r) => r.method === "POST" && r.url.startsWith("/sim/control"))
+  )
+  check(
+    "clicking 8× POSTs /sim/control?speed=8 to the bridge with the token",
+    control.url === "/sim/control?speed=8" && control.headers["x-cs2mcp-token"] === TOKEN,
+    `${control.method} ${control.url}`
+  )
+  const shown = await waitFor("the UI to show 8×", async () => {
+    const now = await cdp.evaluate(buttonState)
+    return now.pressed === "true" && now.badge ? now : null
+  })
+  check("the UI shows 8× in the header and on the city card", shown.pressed === "true" && shown.badge)
+  await sleep(6_000) // the next /state poll must keep showing what the bridge now reports
+  const stays = await cdp.evaluate(buttonState)
+  check("the speed stays after the next poll", stays.pressed === "true" && stub.sim.selectedSpeed === 8)
+
+  const beforeRefused = stub.requests.length
+  const refusedCalls = await cdp.evaluate(`Promise.all([
+      fetch("/api/sim/control?speed=99", { method: "POST" }),
+      fetch("/api/sim/control?speed=2&cheat=1", { method: "POST" }),
+      fetch("/api/sim/control", { method: "POST" }),
+      fetch("/api/sim/control?paused=true"),
+      fetch("/api/sim/run?hours=1", { method: "POST" }),
+    ]).then((rs) => rs.map((r) => r.status))`)
+  check(
+    "invalid control calls and other POSTs are refused before the bridge",
+    refusedCalls.join() === "400,400,400,405,405" && stub.requests.length === beforeRefused,
+    refusedCalls.join()
+  )
+
   const opened = await cdp.evaluate(`window.open("about:blank") === null`)
   check("window.open is denied", opened === true)
 
@@ -252,7 +303,11 @@ try {
   )
 
   const mutating = stub.requests.filter((r) => r.method !== "GET")
-  check("the bridge only ever saw GET requests", mutating.length === 0)
+  check(
+    "the bridge only ever saw GET requests and the one speed POST",
+    mutating.length === 1 && mutating[0].method === "POST" && mutating[0].url === "/sim/control?speed=8",
+    mutating.map((r) => `${r.method} ${r.url}`).join(", ")
+  )
 } catch (err) {
   check("smoke run", false, err.message)
 } finally {
