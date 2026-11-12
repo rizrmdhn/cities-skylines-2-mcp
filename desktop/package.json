@@ -1,0 +1,36 @@
+{
+  "name": "cs2-mcp-desktop",
+  "productName": "CS2MCP Companion",
+  "private": true,
+  "version": "0.11.0",
+  "description": "Native desktop app for the CS2MCP web companion (Electron shell around web/)",
+  "author": "CS2MCP contributors",
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "postinstall": "install-electron",
+    "dev": "npm --prefix ../web run build && node scripts/build.mjs && electron .",
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "icons": "node scripts/make-icons.mjs",
+    "smoke": "node scripts/build.mjs && node scripts/smoke.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "dotenv": "^18.0.10",
+    "electron": "~45.3.0",
+    "electron-builder": "^26.18.0",
+    "electron-updater": "^6.8.11",
+    "esbuild": "^0.28.2",
+    "typescript": "~6.0.2",
+    "vitest": "^5.1.0",
+    "zod": "^4.6.7"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

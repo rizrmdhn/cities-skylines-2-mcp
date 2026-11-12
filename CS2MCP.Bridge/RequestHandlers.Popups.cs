@@ -18,8 +18,8 @@ namespace CS2MCP
     /// barrier. Milestone rewards are granted before the popup is shown, so dismissing
     /// or disabling popups loses nothing.
     ///
-    /// The UI types live in Colossal.UI.Binding (not referenced by this project),
-    /// so bindings are accessed through reflection.
+    /// The bindings are private fields of the game's UI systems, so they are reached
+    /// through reflection.
     /// </summary>
     public sealed partial class RequestHandlers
     {

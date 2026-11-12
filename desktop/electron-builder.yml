@@ -1,0 +1,75 @@
+# electron-builder configuration of the CS2MCP Companion desktop app (see README.md, "Packaging").
+# Build first (`npm run build` here, or `npm run desktop:dist` at the repo root, which also builds
+# the web app): only dist/ and package.json are packaged.
+appId: com.cs2mcp.companion
+productName: CS2MCP Companion
+copyright: Copyright © CS2MCP contributors
+
+directories:
+  output: release
+  buildResources: assets
+
+# The app reads only dist/ at runtime and every npm package is bundled into dist/main.cjs, so no
+# node_modules are shipped (all packages are devDependencies) and there is nothing to rebuild.
+# Source maps stay out of the package.
+files:
+  - dist/**
+  - "!dist/**/*.map"
+  - package.json
+npmRebuild: false
+asar: true
+
+# The default helper bundle (winCodeSign 2.6.0, used for the exe metadata and for signing) contains
+# macOS symlinks that Windows only lets administrators (or Developer Mode) extract. 1.1.0 is plain
+# zips: no administrator rights needed, same result.
+toolsets:
+  winCodeSign: "1.1.0"
+
+# The window icon is handed to the OS by path, so it lives next to app.asar instead of inside it.
+asarUnpack:
+  - dist/assets/**
+  - dist/mcp-server/**
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  icon: assets/icon.ico
+  # The zip build has no target section of its own; the installer sets its own name under nsis.
+  artifactName: CS2MCP-Companion-${version}-win-${arch}.${ext}
+  # Unsigned unless CSC_LINK (or WIN_CSC_LINK) points at a code-signing certificate and
+  # CSC_KEY_PASSWORD (or WIN_CSC_KEY_PASSWORD) opens it: electron-builder then signs the app, the
+  # uninstaller and the installer with signtool. Without them the build still succeeds, unsigned.
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
+    rfc3161TimeStampServer: http://timestamp.digicert.com
+
+nsis:
+  # Assisted installer, always per user (%LOCALAPPDATA%\Programs\CS2MCP Companion), never asks for
+  # administrator rights.
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createStartMenuShortcut: true
+  # Created by the first install; an update does not bring it back once the user deleted it.
+  createDesktopShortcut: true
+  shortcutName: CS2MCP Companion
+  uninstallDisplayName: CS2MCP Companion
+  runAfterFinish: true
+  # Settings and logs (%APPDATA%\CS2MCP Companion) are kept on uninstall.
+  deleteAppDataOnUninstall: false
+  artifactName: CS2MCP-Companion-Setup-${version}.${ext}
+
+# Where release builds go and (through resources/app-update.yml) where the app looks for updates.
+# Companion releases are tagged desktop-v<version> (e.g. desktop-v0.11.0) so they never collide
+# with the game mod's own releases in the same repository. GitHub's "latest release" is repo-wide,
+# so the updater feature (src/features/updater.ts) picks the newest desktop-v* release itself.
+publish:
+  provider: github
+  owner: rizrmdhn
+  repo: cities-skylines-2-mcp
+  tagNamePrefix: desktop-v
+  releaseType: draft

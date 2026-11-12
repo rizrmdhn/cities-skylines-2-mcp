@@ -6,13 +6,20 @@
  * running inside the game (default http://127.0.0.1:8642, override with the
  * CS2_BRIDGE_URL environment variable).
  */
-import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { registerPromptsAndResources } from "./prompts.js";
+
+// mcp-server/.env first, wherever the client starts us from (registered globally, the working
+// directory is whatever project is open); then a .env in the working directory. Quiet: stdout is
+// the MCP channel.
+loadDotenv({ path: fileURLToPath(new URL("../.env", import.meta.url)), quiet: true });
+loadDotenv({ quiet: true });
 
 const BRIDGE_URL = (process.env.CS2_BRIDGE_URL ?? "http://127.0.0.1:8642").replace(/\/+$/, "");
 const BRIDGE_TOKEN = process.env.CS2MCP_TOKEN?.trim() ?? "";
@@ -290,6 +297,48 @@ registerJsonTool(
   "Electricity (production/consumption/battery/trade), water & sewage (capacity/consumption/trade) " +
     "and garbage accumulation of the loaded city. Compare production vs consumption to spot shortages.",
   "/city/services",
+);
+
+const INFOVIEWS = [
+  "education",
+  "healthcare",
+  "garbage",
+  "police",
+  "fireAndRescue",
+  "disaster",
+  "electricity",
+  "water",
+  "traffic",
+  "post",
+  "telecom",
+  "transport",
+  "population",
+  "workplaces",
+  "tourism",
+  "pollution",
+] as const;
+
+server.registerTool(
+  "cs2_infoview",
+  {
+    title: "Read an info view panel",
+    description:
+      "The figures of one of the game's info view panels, recalculated now as if the panel were open: " +
+      "education (students, eligible citizens and capacity per school level, education distribution), healthcare " +
+      "(patients vs capacity, sick, death rate, cemetery use), garbage (landfill stored vs capacity, processing vs " +
+      "garbage rate), police (criminals, crime per month, jail and prison use), disaster (shelter use), electricity, " +
+      "water, post, telecom and more. Indicator values are { min, max, current } on the panel's bar.",
+    inputSchema: {
+      view: z.enum(INFOVIEWS).describe("Which panel"),
+    },
+  },
+  async ({ view }) => {
+    try {
+      return jsonResult(await bridgeJson(`/city/infoview?view=${view}`, 20_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
 );
 
 const COVERAGE_SERVICES = [

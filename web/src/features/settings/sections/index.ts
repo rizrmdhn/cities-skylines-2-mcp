@@ -1,0 +1,16 @@
+/**
+ * Settings section registration list: ONE line per desktop feature that has settings, kept in
+ * alphabetical order. The export name is the camelCase feature id, the file is sections/<id>.tsx:
+ *
+ *   export { default as <camelCaseId> } from "./<id>"
+ *
+ * The settings page renders them in this order, each only when the desktop app reports the
+ * feature as started. See "Adding a settings section" in desktop/README.md.
+ */
+export { default as gameDetect } from "./game-detect"
+export { default as notifications } from "./notifications"
+export { default as overlay } from "./overlay"
+export { default as startup } from "./startup"
+export { default as setup } from "./setup"
+export { default as tray } from "./tray"
+export { default as updater } from "./updater"

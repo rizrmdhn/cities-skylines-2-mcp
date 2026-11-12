@@ -26,7 +26,7 @@ Cities: Skylines II
 
 - Windows + Cities: Skylines II (Steam)
 - .NET SDK 8.0+ (to build the mod)
-- Node.js 18+ (to run the MCP server)
+- Node.js 18+ (to run the MCP server), 22.12+ for the web companion
 
 ## Build & Install
 
@@ -34,11 +34,25 @@ Cities: Skylines II
 # 1. Build the in-game mod (auto-deploys to the game's local Mods folder)
 dotnet build CS2MCP.Bridge\CS2MCP.Bridge.csproj
 
-# 2. Build the MCP server
-cd mcp-server
-npm install
+# 2. Install and build the MCP server and the web companion (from the repository root)
+npm run setup
 npm run build
 ```
+
+Root scripts (`npm run <name>` in the repository root):
+
+| Script | What it does |
+|---|---|
+| `setup` | `npm install` in `mcp-server/`, `web/` and `desktop/` |
+| `build` / `build:mcp` / `build:web` / `build:desktop` | Build MCP and web, or one component |
+| `mcp:register` / `mcp:unregister` | Register the `cs2` server with Claude Code for every project (user scope), or remove it |
+| `web` | Build and start the [web companion](#web-companion) on http://127.0.0.1:8643 |
+| `web:start` / `web:dev` | Start the last build without rebuilding / run it with hot reload on http://127.0.0.1:5173 |
+| `web:shortcut` / `web:shortcut:remove` | Put a **CS2MCP Companion** shortcut on the desktop (Windows), or remove it |
+| `web:open` / `web:restart` / `web:stop` | What the shortcut does (start in the background if needed, open the browser) / restart / stop the background server |
+| `desktop:start` / `desktop:build` | Launch the native companion / build its Electron app (also builds the web renderer) |
+| `desktop:pack` / `desktop:dist` | Create an unpacked Windows app / Windows installer, portable ZIP and update metadata |
+| `test` | Type-check and test the web companion |
 
 The mod deploys to `%USERPROFILE%\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\CS2MCP\` and loads automatically on game start — no Paradox Mods publishing required. To disable it temporarily, rename the folder to `.CS2MCP`.
 
@@ -59,13 +73,14 @@ setx CS2_PATH "D:\Steam\steamapps\common\Cities Skylines II"
 
 ### Runtime environment variables (.env supported)
 
-The MCP server loads `mcp-server/.env` via [dotenv](https://github.com/motdotla/dotenv) (see `.env.example`):
+The MCP server loads `mcp-server/.env` via [dotenv](https://github.com/motdotla/dotenv) (see `.env.example`), whichever folder it is started from; a `.env` in the working directory fills in anything it does not set. The web companion reads `web/.env` and then the same `mcp-server/.env`, so one file configures both.
 
 | Variable | Scope | Default | Description |
 |---|---|---|---|
-| `CS2_BRIDGE_URL` | MCP server | `http://127.0.0.1:8642` | Address of the bridge mod |
+| `CS2_BRIDGE_URL` | MCP server, web companion | `http://127.0.0.1:8642` | Address of the bridge mod |
 | `CS2MCP_PORT` | game process | `8642` | Bridge listen port (change both together) |
-| `CS2MCP_TOKEN` | game process **and** MCP server | *(unset)* | Optional shared secret sent as `X-CS2MCP-Token`; when set for the game, every route except `/ping` requires it. Independently, requests with an `Origin` header or a non-loopback `Host` are always rejected, and state-changing routes require POST |
+| `CS2MCP_WEB_PORT` | web companion | `8643` | Port of the web companion |
+| `CS2MCP_TOKEN` | game process, MCP server **and** web companion | *(unset)* | Optional shared secret sent as `X-CS2MCP-Token`; when set for the game, every route except `/ping` requires it. Independently, requests with an `Origin` header or a non-loopback `Host` are always rejected, and state-changing routes require POST |
 | `CS2MCP_READONLY` | game process | *(unset)* | `1` forces read-only mode: every state-changing route is refused with 403 (same as the in-game option) |
 | `CS2MCP_SPEND_LIMIT` | game process | *(unset)* | Most money AI build requests may spend per loaded save; overrides the in-game slider |
 | `CS2_PATH` | build time | auto-probed | Game install folder |
@@ -82,11 +97,14 @@ The MCP server tells the bridge how long it will wait for each request (`X-CS2MC
 
 ## Using with Claude
 
-**Claude Code**: [.mcp.json](.mcp.json) in the repository root registers the `cs2` server — just open Claude Code in the project directory (it asks for trust on first use). To register from another directory:
+**Claude Code**: to use the `cs2` server in every project, register it once at user scope from the repository root:
 
 ```powershell
-claude mcp add cs2 -- node <repo-path>\mcp-server\dist\index.js
+npm run mcp:register      # builds the MCP server, then: claude mcp add --scope user cs2 -- node <repo-path>\mcp-server\dist\index.js
+npm run mcp:unregister    # removes it again
 ```
+
+Inside this repository [.mcp.json](.mcp.json) also registers `cs2` for the project (Claude Code asks for trust on first use), so contributors get it without registering.
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
@@ -103,7 +121,33 @@ claude mcp add cs2 -- node <repo-path>\mcp-server\dist\index.js
 
 Start the game, load a save, then ask Claude: "How are my city's finances?", "Zone a residential area by the river", "Build a road connecting the industrial area to the highway".
 
-## Tool Reference (91 tools)
+## Web companion
+
+A read-only page to keep open beside the game and the chat:
+
+- **Dashboard**: connection state (bridge reachable, game loading, AI requests off, read-only, version mismatch), city overview, the status of every city service (traffic, electricity, water, sewage, garbage & recycling, healthcare, fire & rescue, police, disaster shelters, education, post, parks, welfare, telecom) with the warning icons in each area, the happiness factors split into wellbeing and health, every warning type in the city, and zone demand.
+- **AI activity**: every change made through the bridge with its cost, result and parameters, plus spending against the AI spending limit.
+- **Map**: the whole map as a heatmap of one data layer (land value, pollution, ground water), roads with traffic flow once you zoom in (loaded per 2 km tile and cached for 5 minutes; a change made through the bridge refreshes them), the game camera and the positions of AI changes. Click a point, or drag an area or a line, to get world coordinates and ready-to-paste prompts for the AI. Layer, position and selection stay in the URL.
+
+```powershell
+npm run web:shortcut   # once: builds it and puts a "CS2MCP Companion" shortcut on the desktop
+```
+
+Double-click the shortcut when you play: it starts the companion in the background (no console window) if it is not running yet and opens http://127.0.0.1:8643 in your browser. The server keeps running after you close the tab, so the next click is instant; `npm run web:stop` ends it. After changing the code, run `npm run build:web` and then `npm run web:restart` (a server from an older version is also restarted by the shortcut). Its log is in `web/.runtime/companion.log`. To run it in a terminal instead: `npm run web`.
+
+The browser never talks to the bridge itself. The companion server answers on `127.0.0.1` only, forwards a fixed list of read-only GET routes, refuses other Host names, cross-site requests and any other method, and adds `CS2MCP_TOKEN` on its side so the token never reaches the browser. It runs on its own, separate from the MCP server, so any number of MCP clients can run beside it.
+
+## Native desktop companion
+
+The Windows desktop app wraps the existing React companion in Electron and adds a system tray, a compact always-on-top overlay, notifications, trend history, saved city sessions, game detection, Start with Windows, automatic updates and a first-run setup wizard. It can bundle and register the MCP server with supported AI clients, so players do not need a separate Node.js installation for the desktop workflow.
+
+```powershell
+npm run desktop:dist   # build the Windows installer and portable ZIP in desktop/release/
+```
+
+The installer is per-user and does not require administrator rights. Settings and history stay in `%APPDATA%\CS2MCP Companion` after uninstall. See [desktop/README.md](desktop/README.md) for development, setup, packaging, update and release details. The web companion remains available independently through the commands above.
+
+## Tool Reference (92 tools)
 
 **State & view**
 
@@ -122,6 +166,7 @@ Start the game, load a save, then ask Claude: "How are my city's finances?", "Zo
 | `cs2_demand` | RCI demand + demand factors (internal 0-255 scale; refreshes only while simulating) |
 | `cs2_budget` | Budget breakdown: 14 income / 15 expense sources |
 | `cs2_city_services` | Electricity, water & sewage, garbage status |
+| `cs2_infoview` | The figures of a game info view panel, recalculated now: education (students / eligible / capacity per school level), healthcare (patients, cemetery), garbage (landfill, processing), police (jail, prison, crime), disaster shelters, electricity, water, post, telecom and more |
 | `cs2_coverage` | Service coverage of zoned buildings (healthcare, fire, police, parks, post, education, shelters, welfare, telecom): underserved buildings/residents, level buckets on the infoview scale, providers and the worst coverage gaps to place new service buildings |
 | `cs2_labor` | Employment, unemployment, jobs by education level, age structure |
 | `cs2_statistics` | Time series for 60+ statistics (32 samples per in-game day) |

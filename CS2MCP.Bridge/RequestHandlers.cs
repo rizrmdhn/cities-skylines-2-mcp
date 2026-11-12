@@ -233,6 +233,10 @@ namespace CS2MCP
                     return BuildInterchange(request);
                 case "/history":
                     return GetHistory(request);
+                case "/city/infoview":
+                    return GetInfoview(request);
+                case "/city/road-network":
+                    return GetRoadNetwork(request);
                 default:
                     return BridgeResponse.Error(404,
                         $"unknown endpoint: {request.Path}. Endpoints are grouped under /state, /city/*, /build/*, /transit/*, " +
