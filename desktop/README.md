@@ -73,7 +73,7 @@ font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src '
 form-action 'none'; frame-src 'none'; frame-ancestors 'none'
 ```
 
-`/api/*` requests with an `Origin` other than `app://cs2mcp` are refused (403). The renderer talks to the main process **only through `fetch`**; do not add a preload or IPC.
+`/api/*` requests with an `Origin` other than `app://cs2mcp` are refused (403). (Unlike the browser companion the app does not *require* an Origin on the control POST: Electron sends none on same-origin `app://` requests. Nothing but the app's own locked-down windows can reach the handler.) The renderer talks to the main process **only through `fetch`**; do not add a preload or IPC.
 
 Other behaviour: single instance (a second launch focuses the existing window and exits), main window bounds and maximized state remembered (`window.main` setting, minimum 900 × 600), app name "CS2MCP Companion", AppUserModelID `com.cs2mcp.companion`, icon `assets/icon.ico`, no menu when packaged (dev: View → reload / devtools / zoom).
 
@@ -104,7 +104,7 @@ The renderer calls `fetch("/api/desktop/<name>")` — GET for reads, POST with a
 | `GET /api/desktop/settings` | every exposed setting, secrets as `<key>Set`: `{ "bridgeUrl": null, "tokenSet": false, "effective": { "bridgeUrl": "http://127.0.0.1:8642", "bridgeUrlSource": "default", "tokenSet": false, "tokenSource": "default" }, "secretsEncrypted": true, "<feature>.<key>": … }` (`*Source` is `env` / `settings` / `dotenv` / `default`) |
 | `POST /api/desktop/settings` | body: partial `{ "<key>": value }`. Each key is validated by its schema; unknown or unexposed keys are refused; all-or-nothing. `""` or `null` clears `bridgeUrl`/`token`. Answers like the GET. |
 
-The bridge proxy on `/api/<bridge route>` is unchanged: GET only, the allowlist in `web/server/routes.ts`.
+The bridge proxy on `/api/<bridge route>`: GET on the read allowlist, plus the one control route `POST /api/sim/control?speed=0..8&paused=true|false` (pause / resume / speed buttons in the header, `web/src/components/sim-controls.tsx`); both lists live in `web/server/routes.ts`, which documents how to add a control route. `apiControl()` in `web/src/lib/api.ts` is the web side of it. Every other POST is refused with 405 before the bridge.
 
 ### Web side (`web/src/lib/`)
 
@@ -307,7 +307,7 @@ Settings store details: JSON at `<userData>/settings.json` (`{ "version": 1, "va
 - **Tray / close to tray**: `ctx.onWindowAllClosed(() => "keep-running")` and hide instead of closing:
   `ctx.onMainWindowCreated((win) => win.on("close", (e) => { if (!ctx.isQuitting()) { e.preventDefault(); win.hide() } }))`. Tray "Open" → `ctx.showMainWindow()`, "Quit" → `ctx.quit()`. Icon: `ctx.paths.icon` (or files you add under `assets/`, copied to `dist/assets`).
 - **Overlay window**: `ctx.createWindow({ route: "/overlay", width: 360, height: 220, alwaysOnTop: true, frame: false, skipTaskbar: true })`. The page is a normal TanStack route in `web/src/routes/` (the SPA fallback serves it). Global hotkey: `globalShortcut.register` in `onReady`, `globalShortcut.unregisterAll()` in `onBeforeQuit`.
-- **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable. Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core.
+- **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable (`ctx.bridge` is GET only; the control POST exists only for the renderer). Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core.
 - **Start with Windows / hidden start**: `app.setLoginItemSettings({ openAtLogin, args: ["--hidden"] })`; with `--hidden` the main window is not created (`ctx.launch.hidden`), so pair it with the tray. In dev, the login item would start bare `electron.exe`: only enable it when `ctx.isPackaged`.
 - **Settings page**: a web route that reads `GET /api/desktop/settings` and writes with `apiPost("/desktop/settings", patch)`; `useDesktop()` decides whether to show it. Feature settings appear there automatically under their namespaced keys.
 - **Packaging / auto-update**: package `dist/**` and `package.json` (`main` is `dist/main.cjs`); icon `assets/icon.ico`; app id `com.cs2mcp.companion`, product name from `productName`. Nothing else is needed at runtime. Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
@@ -315,4 +315,4 @@ Settings store details: JSON at `<userData>/settings.json` (`{ "version": 1, "va
 ## Testing
 
 - `npm test` (in `desktop/`): settings store, route registry, config precedence, lifecycle, the `app://` handler (static, CSP, proxy, Origin check, settings routes), `ctx.bridge`, version parity, and the README feature example. No Electron needed.
-- `npm run smoke`: builds, starts `scripts/stub-bridge.mjs` on a free port, launches Electron with `CS2_BRIDGE_URL` pointing at it, a throwaway profile and `--remote-debugging-port`, then drives the window over the DevTools protocol: dashboard shows the stub city, no Node in the renderer, CSP blocks inline scripts, `/api/desktop/info`, `POST /api/build/road` refused before the bridge, no token in `/api/desktop/settings`, settings POST/validation, `window.open` denied, navigation blocked, single instance, clean quit, saved window state. Options: `--screenshot <file.png>`, `--verbose`. It never contacts a real bridge. Add a check there when your feature has visible end-to-end behaviour.
+- `npm run smoke`: builds, starts `scripts/stub-bridge.mjs` on a free port, launches Electron with `CS2_BRIDGE_URL` pointing at it, a throwaway profile and `--remote-debugging-port`, then drives the window over the DevTools protocol: dashboard shows the stub city, no Node in the renderer, CSP blocks inline scripts, `/api/desktop/info`, `POST /api/build/road` refused before the bridge, a real click on the 8× button reaches the stub as `POST /sim/control?speed=8` and shows in the UI (invalid control calls refused before the bridge), no token in `/api/desktop/settings`, settings POST/validation, `window.open` denied, navigation blocked, single instance, clean quit, saved window state. Options: `--screenshot <file.png>`, `--verbose`. It never contacts a real bridge. Add a check there when your feature has visible end-to-end behaviour.
