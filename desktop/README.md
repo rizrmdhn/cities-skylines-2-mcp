@@ -26,7 +26,7 @@ Inside `desktop/`:
 | `npm run smoke` | build + `scripts/smoke.mjs` |
 | `npm run icons` | regenerates `assets/icon.ico` / `icon.png` from the favicon design (committed; rerun only when the favicon changes) |
 
-To see it work without the game: `node scripts/stub-bridge.mjs` prints a URL; start the app with `CS2_BRIDGE_URL=<that url>`.
+To see it work without the game: `node scripts/stub-bridge.mjs` prints a URL; start the app with `CS2_BRIDGE_URL=<that url>`. The stub runs a simulation clock (frame, game date and the city figures advance with real time x the selected speed and stand still while paused; `stub.sim.frame` / `.cityName` / `.cityLoaded` can be set by tests), so the Trends page fills with moving data.
 
 Logs: `%APPDATA%\CS2MCP Companion\logs\main.log` (settings in `settings.json` next to `logs\`). `CS2MCP_DESKTOP_USER_DATA=<dir>` uses another profile folder (tests and the smoke script do this, so they never touch your settings or collide with a running app).
 
@@ -60,6 +60,7 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 | `src/testing.ts` | `createTestContext()` for Node tests | no |
 | `src/features/index.ts` | **the registration list** | — |
 | `src/features/settings-api.ts` | built-in feature: `GET/POST /api/desktop/settings` | no |
+| `src/features/trends.ts` | trend recorder + `/api/desktop/trends*` (see "Trend history") | no |
 
 Modules marked "no" must stay importable in plain Node: tests load them. Import Electron only with `import type` there.
 
@@ -123,6 +124,31 @@ type DesktopInfo, DesktopSettings, ConfigSource
 ```
 
 Tests (`web/src/test/server.ts`): by default every `/api/desktop/*` request answers the browser companion's 404, so `useDesktop()` reports `isDesktop: false`. Call `enableDesktopMode(partialInfo?)` in a test to be "in the desktop app", and `server.use(http.get("*/api/desktop/x", …))` for your route.
+
+## Trend history (`src/features/trends.ts`, page `/trends`)
+
+The bridge only knows the present, so the main process records how the city develops and the **Trends** page (`web/src/features/trends/`, nav item only inside the desktop app; the browser companion shows an "available in the desktop app" note) charts it. Recording runs in the background whether or not a window is open.
+
+**Recorder.** One tick every `trends.intervalSeconds` (default 60, 10 to 3600). Each tick asks `GET /state` (cheap). Only when a city is loaded, not loading, not paused and the simulation frame moved since the newest stored sample does it also ask `/city/overview`, `/city/demand` and `/city/budget`, one after the other (the bridge answers on the game's main thread): 4 requests per sample, 1 per tick otherwise. No city: one `/state` every 30 s at most. Bridge unreachable or failing: the pause doubles per failure up to 5 minutes (never shorter than the interval) and the recording stretch is closed. A paused game records nothing, so a pause never produces duplicate samples (money spent while paused shows with the first sample after resuming).
+
+**Metrics.** `population`, `money`, `happiness` and `health` (the averages), `xp` from `/city/overview`; the six `buildingDemand` values (residential low/medium/high, commercial, industrial, office) from `/city/demand`; `income` and `expenses` (the game's monthly rates, updated hourly) from `/city/budget`, which is why that read-only route is on the allowlist in `web/server/routes.ts`. A route a bridge does not have just leaves its metrics out.
+
+**Time axes.** Every sample stores the wall-clock time `t` and the game clock: the simulation `frameIndex` from `/state` (262144 frames per game day; it stands still while paused, and also during forced pauses) and the game date string. Charts offer *Game time* (default; position = frame, so 8x play and pauses do not distort it) and *Real time*. **Older saves:** a "run" is one uninterrupted recording stretch; a new run starts after an app start, an outage, a switch of city, or when game time goes backwards, which is checked against the previous *poll* as well as the newest stored sample (a save loaded paused and then run at 8x can pass the old frame before the next sample). On the game axis a run that starts earlier in game time hides the abandoned future of the runs before it (those samples stay on disk and on the real-time axis); lines are broken between runs.
+
+**City identity and its limit.** The bridge only exposes the city *name*, so a series is keyed by the name (`<slug>-<hash of the exact name>`). Renaming a city starts a new series; two different saves with the same name share one series (their game times interleave as separate runs). Nothing better is available from `/state` or `/city/overview`.
+
+**Storage.** `<userData>/trends/<city key>.jsonl`, append-only, line 1 `{"trends":1,"city":"<name>"}`, then one JSON object per sample with short keys: `t` (ms), `s` (run), `f` (frame), `g` (game date), `pop money hap hlt xp inc exp dRl dRm dRh dC dI dO`. A sample is one `appendFile` of one full line, so a crash leaves at most one torn last line, which is skipped on load (the next append starts on a fresh line). Unreadable lines are skipped and the file is rewritten (temp file + rename); a file with nothing readable is moved aside as `*.corrupt-<time>`. **Bounded:** samples older than `trends.retentionDays` (default 365, 0 = keep) are dropped, and a city holds at most 10 000 samples (about 2 MB): past that the older half is thinned 2:1 repeatedly, keeping the first and last sample of every run, so old history gets sparser but never unbounded.
+
+| route | answer |
+| --- | --- |
+| `GET /api/desktop/trends` | recorder status: `state` (`recording`, `paused`, `no-city`, `unreachable`, `error`, `disabled`, `starting`), `city`, `lastSampleAt`, `sessionSamples`, `nextPollAt`, `error`, `consecutiveFailures`, the settings `enabled` / `intervalSeconds` / `retentionDays`, `maxSamplesPerCity`, `bytes` on disk |
+| `GET /api/desktop/trends/cities` | `{ cities: [{ key, name, samples, firstAt, lastAt, firstGame, lastGame }] }`, newest first |
+| `GET /api/desktop/trends/series?city=<key>&axis=game or real&from=&to=&last=&points=` | `{ city, metrics, framesPerDay, axis, extent, from, to, samples, points }`. Range in axis units (frames or ms); `last` = the newest N units. `points` (default 600, 0 = every sample) reduces the range to equal buckets of mean values; each point has `x`, `t`, `frame`, `game`, `run`, `gap` and one field per metric (`null` = not recorded). 404 for a city without data |
+| `POST /api/desktop/trends/clear` | body `{ "city": "<key>" }` or `{ "all": true }`; answers `{ cleared }` |
+
+Settings (also in `GET/POST /api/desktop/settings`, so a settings page picks them up): `trends.enabled`, `trends.intervalSeconds`, `trends.retentionDays`. The Trends page edits the first two itself and has the confirmed "Clear data" action and the CSV export (a Blob and a temporary `<a download>`; it does not use a shared desktop download path).
+
+**Charts: hand-written SVG, no dependency.** shadcn's chart component means Recharts; a minimal Recharts line chart bundles to about 375 KB (113 KB gzip) before the shadcn wrapper, for seven small line charts. `web/src/features/trends/trend-chart.tsx` draws them directly: gaps between runs, game-date tick labels, theme-aware colours through Tailwind `text-*` classes, hover and keyboard (arrow keys) cursor with tooltip. Inline SVG needs nothing from the CSP.
 
 ## Adding a feature
 
@@ -315,4 +341,4 @@ Settings store details: JSON at `<userData>/settings.json` (`{ "version": 1, "va
 ## Testing
 
 - `npm test` (in `desktop/`): settings store, route registry, config precedence, lifecycle, the `app://` handler (static, CSP, proxy, Origin check, settings routes), `ctx.bridge`, version parity, and the README feature example. No Electron needed.
-- `npm run smoke`: builds, starts `scripts/stub-bridge.mjs` on a free port, launches Electron with `CS2_BRIDGE_URL` pointing at it, a throwaway profile and `--remote-debugging-port`, then drives the window over the DevTools protocol: dashboard shows the stub city, no Node in the renderer, CSP blocks inline scripts, `/api/desktop/info`, `POST /api/build/road` refused before the bridge, a real click on the 8× button reaches the stub as `POST /sim/control?speed=8` and shows in the UI (invalid control calls refused before the bridge), no token in `/api/desktop/settings`, settings POST/validation, `window.open` denied, navigation blocked, single instance, clean quit, saved window state. Options: `--screenshot <file.png>`, `--verbose`. It never contacts a real bridge. Add a check there when your feature has visible end-to-end behaviour.
+- `npm run smoke`: builds, starts `scripts/stub-bridge.mjs` on a free port, launches Electron with `CS2_BRIDGE_URL` pointing at it, a throwaway profile and `--remote-debugging-port`, then drives the window over the DevTools protocol: dashboard shows the stub city, no Node in the renderer, CSP blocks inline scripts, `/api/desktop/info`, `POST /api/build/road` refused before the bridge, a real click on the 8× button reaches the stub as `POST /sim/control?speed=8` and shows in the UI (invalid control calls refused before the bridge), the trend recorder saved samples from the stub and the Trends page draws them, no token in `/api/desktop/settings`, settings POST/validation, `window.open` denied, navigation blocked, single instance, clean quit, saved window state. Options: `--screenshot <file.png>`, `--verbose`. It never contacts a real bridge. Add a check there when your feature has visible end-to-end behaviour.
