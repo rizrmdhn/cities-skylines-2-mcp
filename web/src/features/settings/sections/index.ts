@@ -7,4 +7,5 @@
  * The settings page renders them in this order, each only when the desktop app reports the
  * feature as started. See "Adding a settings section" in desktop/README.md.
  */
+export { default as overlay } from "./overlay"
 export { default as tray } from "./tray"
