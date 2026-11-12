@@ -15,10 +15,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatMoney, formatNumber } from "@/lib/format"
 import { overviewQuery } from "@/lib/queries"
-
-export function speedLabel(paused: boolean, speed: number) {
-  return paused ? "Paused" : `${speed}× speed`
-}
+import { speedLabel } from "@/lib/simulation"
 
 export function CityCard({ className }: { className?: string }) {
   const overview = useQuery(overviewQuery())

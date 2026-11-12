@@ -68,9 +68,9 @@ export function apiGet<T>(
 }
 
 /**
- * POST a JSON body to a companion route. Only the desktop app answers POST, on its own
- * /api/desktop/* routes, e.g. apiPost("/desktop/settings", { bridgeUrl: null }); the browser
- * companion and the bridge proxy refuse it with 405.
+ * POST a JSON body to a companion route. Only the desktop app answers it, on its own
+ * /api/desktop/* routes, e.g. apiPost("/desktop/settings", { bridgeUrl: null }); the bridge proxy
+ * refuses it with 405 (its control routes take query parameters: use apiControl).
  */
 export function apiPost<T>(path: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
   return apiRequest<T>(apiUrl(path), {
@@ -78,5 +78,18 @@ export function apiPost<T>(path: string, body: unknown = {}, signal?: AbortSigna
     signal,
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST one of the bridge proxy's control routes (server/routes.ts CONTROL_ROUTES), parameters in
+ * the query string and no body, e.g. apiControl("/sim/control", { speed: 2 }). The companion
+ * validates the parameters and refuses anything else before it reaches the game.
+ */
+export function apiControl<T>(path: string, params: QueryParams, signal?: AbortSignal): Promise<T> {
+  return apiRequest<T>(apiUrl(path, params), {
+    method: "POST",
+    signal,
+    headers: { Accept: "application/json" },
   })
 }

@@ -27,6 +27,15 @@ export const handlers = [
       ? HttpResponse.json(infoview)
       : HttpResponse.json({ view, refreshed: true, refreshError: null, values: {} })
   }),
+  // The one control route: answers like the bridge, without changing the fixtures.
+  http.post("*/api/sim/control", ({ request }) => {
+    const params = new URL(request.url).searchParams
+    let speed = fixtures.state.simulation?.selectedSpeed ?? 1
+    if (params.has("speed")) speed = Number(params.get("speed"))
+    if (params.get("paused") === "true") speed = 0
+    else if (params.get("paused") === "false" && speed <= 0) speed = 1
+    return HttpResponse.json({ paused: speed <= 0, selectedSpeed: speed })
+  }),
   // The browser companion: no desktop routes. Tests opt into the desktop app with enableDesktopMode().
   http.all("*/api/desktop/*", ({ request }) =>
     apiError(404, "companion", `unknown endpoint: ${new URL(request.url).pathname}`)
