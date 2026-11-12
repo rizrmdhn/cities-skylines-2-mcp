@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 
 import {
+  changesGame,
   errorResponse,
   isApiPath,
+  ORIGIN_REQUIRED_MESSAGE,
   proxyBridgeRequest,
   type ProxyResponse,
 } from "./proxy.ts"
@@ -28,11 +30,14 @@ export function sendProxyResponse(res: ServerResponse, response: ProxyResponse) 
 
 /**
  * Same rules as the bridge itself: only loopback Host names on our own port (DNS rebinding),
- * and no requests started by another site (a cross-origin Origin header).
+ * and no requests started by another site (a cross-origin Origin header). A request that changes
+ * game state (`requireOrigin`) must also carry our own Origin: browsers always send one on POST,
+ * so a missing Origin means a client we cannot vouch for.
  */
 export function refusalReason(
   req: IncomingMessage,
-  port: number | undefined
+  port: number | undefined,
+  { requireOrigin = false }: { requireOrigin?: boolean } = {}
 ): string | null {
   if (port === undefined) return "companion is not listening yet"
   const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`]
@@ -41,6 +46,9 @@ export function refusalReason(
     return `Host header must be ${allowedHosts.join(" or ")}`
   }
   const origin = req.headers.origin?.toLowerCase()
+  if (origin === undefined && requireOrigin) {
+    return ORIGIN_REQUIRED_MESSAGE
+  }
   if (
     origin !== undefined &&
     !allowedHosts.some((allowed) => origin === `http://${allowed}`)
@@ -60,7 +68,9 @@ export function createCompanionHandler(options: CompanionHandlerOptions) {
     const api = isApiPath(url.pathname)
     if (!api && !options.serveStatic) return false
 
-    const refusal = refusalReason(req, options.getPort())
+    const refusal = refusalReason(req, options.getPort(), {
+      requireOrigin: api && changesGame(req.method ?? "GET", url.pathname),
+    })
     if (refusal) {
       sendProxyResponse(res, errorResponse(403, "companion", refusal))
       return true

@@ -3,7 +3,12 @@
  * server (handler.ts), the Vite dev middleware and the desktop app's app:// protocol all answer
  * /api requests through proxyBridgeRequest, so the allowlist and the token handling exist once.
  */
-import { ALLOWED_ROUTES, API_PREFIX, findAllowedRoute, isMutatingBridgePath } from "./routes.ts"
+import {
+  API_PREFIX,
+  findAllowedRoute,
+  findControlRoute,
+  validateControlParams,
+} from "./routes.ts"
 
 export type ErrorKind = "unreachable" | "bridge" | "companion"
 
@@ -41,12 +46,6 @@ export interface ProxyResponse {
 /** The bridge releases a request this long before we give up on it, so its own message wins. */
 const BRIDGE_TIMEOUT_MARGIN_MS = 1_500
 
-for (const route of ALLOWED_ROUTES) {
-  if (isMutatingBridgePath(route.path)) {
-    throw new Error(`allowlisted route ${route.path} changes game state`)
-  }
-}
-
 /** Headers of every JSON answer of the companion. */
 export const JSON_HEADERS: Readonly<Record<string, string>> = {
   "Content-Type": "application/json; charset=utf-8",
@@ -82,18 +81,49 @@ export function isApiPath(pathname: string) {
 }
 
 /**
- * Answers one /api request: only GET on an allowlisted route reaches the bridge, with only the
- * route's query parameters, the bridge timeout header and the token. Never throws.
+ * True for a request that would change the game (a POST on a control route). Transports require
+ * the companion's own Origin on these, besides refusing foreign ones on every /api call: browsers
+ * always send an Origin on POST, so a missing one is a client we cannot vouch for.
+ */
+export function changesGame(method: string, pathname: string) {
+  return method === "POST" && findControlRoute(pathname) !== undefined
+}
+
+/** Refusal text for a control POST without an Origin. */
+export const ORIGIN_REQUIRED_MESSAGE =
+  "requests that change the game need an Origin header from the companion's own page"
+
+/**
+ * Answers one /api request. Only two kinds reach the bridge, with only their own query parameters,
+ * the bridge timeout header and the token:
+ *   - GET on a read route (ALLOWED_ROUTES), unknown parameters dropped;
+ *   - POST on a control route (CONTROL_ROUTES), every parameter validated, anything else refused.
+ * Never throws.
  */
 export async function proxyBridgeRequest(
   request: ProxyRequest,
   options: ProxyOptions
 ): Promise<ProxyResponse> {
+  const control = findControlRoute(request.pathname)
+  if (control) {
+    if (request.method !== control.method) {
+      return errorResponse(
+        405,
+        "companion",
+        `${control.path} changes game state: only ${control.method} is allowed`,
+        { Allow: control.method }
+      )
+    }
+    const validated = validateControlParams(control, request.searchParams)
+    if ("error" in validated) return errorResponse(400, "companion", validated.error)
+    return forward(control.method, control.path, validated.params, control.timeoutMs, options)
+  }
+
   if (request.method !== "GET") {
     return errorResponse(
       405,
       "companion",
-      "the web companion is read-only: only GET is allowed",
+      "this route is read-only: only GET is allowed",
       { Allow: "GET" }
     )
   }
@@ -107,13 +137,24 @@ export async function proxyBridgeRequest(
     const value = request.searchParams.get(name)
     if (value !== null) query.set(name, value)
   }
+  return forward("GET", route.path, query, route.timeoutMs, options)
+}
+
+/** Sends one checked request to the bridge and maps its answer (or failure) to a ProxyResponse. */
+async function forward(
+  method: "GET" | "POST",
+  path: string,
+  query: URLSearchParams,
+  timeoutMs: number,
+  options: ProxyOptions
+): Promise<ProxyResponse> {
   // Spaces as %20: older bridge builds kept '+' literal.
   const queryString = query.toString().replace(/\+/g, "%20")
   const bridgeUrl = options.bridgeUrl.replace(/\/+$/, "")
-  const target = `${bridgeUrl}${route.path}${queryString ? `?${queryString}` : ""}`
+  const target = `${bridgeUrl}${path}${queryString ? `?${queryString}` : ""}`
 
   const headers: Record<string, string> = {
-    "X-CS2MCP-Timeout-Ms": String(Math.max(1_000, route.timeoutMs - BRIDGE_TIMEOUT_MARGIN_MS)),
+    "X-CS2MCP-Timeout-Ms": String(Math.max(1_000, timeoutMs - BRIDGE_TIMEOUT_MARGIN_MS)),
   }
   if (options.token) headers["X-CS2MCP-Token"] = options.token
 
@@ -122,9 +163,9 @@ export async function proxyBridgeRequest(
   let text: string
   try {
     bridgeResponse = await doFetch(target, {
-      method: "GET",
+      method,
       headers,
-      signal: AbortSignal.timeout(route.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     text = await bridgeResponse.text()
   } catch (err) {
@@ -132,7 +173,7 @@ export async function proxyBridgeRequest(
       return errorResponse(
         504,
         "unreachable",
-        `the CS2 bridge did not answer ${route.path} within ${route.timeoutMs / 1000} s`
+        `the CS2 bridge did not answer ${path} within ${timeoutMs / 1000} s`
       )
     }
     return errorResponse(
