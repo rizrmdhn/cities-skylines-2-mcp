@@ -1210,9 +1210,7 @@ namespace CS2MCP
         private bool TransitToolsBusy(out BridgeResponse error)
         {
             error = null;
-            if (World.GetOrCreateSystemManaged<BridgeToolSystem>().IsBusy
-                || World.GetOrCreateSystemManaged<BridgeTransitToolSystem>().IsBusy
-                || World.GetOrCreateSystemManaged<BridgeRoadToolSystem>().IsBusy)
+            if (BridgeTools.AnyBusy(World))
             {
                 error = BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
                 return true;

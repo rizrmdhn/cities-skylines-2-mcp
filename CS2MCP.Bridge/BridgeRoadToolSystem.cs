@@ -115,7 +115,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueueReplace(Entity[] edges, Entity prefabEntity, PrefabBase prefab, bool invert, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -133,7 +133,7 @@ namespace CS2MCP
             m_Applied = false;
             m_Mode = Mode.Replace;
             m_Stage = Stage.CreateDefinitions;
-            m_PreviousTool = m_ToolSystem.activeTool;
+            m_PreviousTool = BridgeTools.PreviousTool(m_ToolSystem);
             m_ToolSystem.activeTool = this;
             return true;
         }
@@ -141,7 +141,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread. The curve must start at start.Position and end at end.Position.</summary>
         public bool TryQueueBuild(Entity prefabEntity, PrefabBase prefab, BuildEnd start, BuildEnd end, Bezier4x3 curve, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -158,7 +158,7 @@ namespace CS2MCP
             m_Applied = false;
             m_Mode = Mode.Build;
             m_Stage = Stage.CreateDefinitions;
-            m_PreviousTool = m_ToolSystem.activeTool;
+            m_PreviousTool = BridgeTools.PreviousTool(m_ToolSystem);
             m_ToolSystem.activeTool = this;
             return true;
         }
@@ -226,7 +226,8 @@ namespace CS2MCP
                     }
 
                     case Stage.Apply:
-                        if (GetAllowApply())
+                        // No preview means nothing would be applied: never report that as built.
+                        if (GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter)
                         {
                             applyMode = ApplyMode.Apply;
                             m_Applied = true;
@@ -234,6 +235,10 @@ namespace CS2MCP
                         else
                         {
                             List<string> errors = CollectTempErrors();
+                            if (errors.Count == 0 && m_TempQuery.IsEmptyIgnoreFilter)
+                            {
+                                errors.Add("the game produced no preview");
+                            }
                             applyMode = ApplyMode.Clear;
                             CompletePending(BridgeResponse.Error(409,
                                 OperationName + " blocked by game validation (" +

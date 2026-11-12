@@ -37,7 +37,7 @@ namespace CS2MCP
         public bool TryQueuePlacement(Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation,
             Entity attachmentPrefab, float3 attachmentOffset, BridgeRequest request)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -52,7 +52,7 @@ namespace CS2MCP
             m_PendingRequest = request;
             m_Applied = false;
             m_Stage = Stage.CreateDefinitions;
-            m_PreviousTool = m_ToolSystem.activeTool;
+            m_PreviousTool = BridgeTools.PreviousTool(m_ToolSystem);
             m_ToolSystem.activeTool = this;
             return true;
         }

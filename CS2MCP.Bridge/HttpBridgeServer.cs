@@ -19,8 +19,13 @@ namespace CS2MCP
     {
         private const int MaxHeaderBytes = 16 * 1024;
         private const int MaxBodyBytes = 1024 * 1024;
-        private const int MainThreadTimeoutMs = 10000;
+        private const int DefaultTimeoutMs = 10000;
+        private const int MinTimeoutMs = 1000;
+        private const int MaxTimeoutMs = 180000;
+        private const int RecentRequestLifetimeSeconds = 600;
         private const string TokenHeader = "X-CS2MCP-Token";
+        private const string RequestIdHeader = "X-CS2MCP-Request-Id";
+        private const string TimeoutHeader = "X-CS2MCP-Timeout-Ms";
         private const string TokenEnvVar = "CS2MCP_TOKEN";
 
         private readonly int m_Port;
@@ -29,6 +34,10 @@ namespace CS2MCP
         private TcpListener m_Listener;
         private Thread m_AcceptThread;
         private volatile bool m_Running;
+
+        /// <summary>State-changing requests by client request id, so a retry is answered with the first run's result.</summary>
+        private readonly Dictionary<string, KeyValuePair<DateTime, BridgeRequest>> m_Recent =
+            new Dictionary<string, KeyValuePair<DateTime, BridgeRequest>>(StringComparer.Ordinal);
 
         public HttpBridgeServer(int port, Action<BridgeRequest> enqueueToMainThread)
         {
@@ -151,10 +160,75 @@ namespace CS2MCP
                     (BridgeOptions.ReadOnlyForcedByEnvironment ? ", forced by CS2MCP_READONLY" : "") + ")");
             }
 
-            m_EnqueueToMainThread(request);
-            BridgeResponse response = request.WaitForResponse(MainThreadTimeoutMs);
-            return response ?? BridgeResponse.Error(503,
-                "simulation thread did not respond within 10s (game still loading, or bridge system disabled)");
+            // A retry of a state-changing request (same request id) waits on the first run
+            // instead of running the operation a second time.
+            BridgeRequest effective = request;
+            if (IsMutatingPath(request.Path) && !string.IsNullOrEmpty(request.RequestId))
+            {
+                effective = ResolveRecent(request);
+            }
+            if (ReferenceEquals(effective, request))
+            {
+                m_EnqueueToMainThread(request);
+            }
+
+            // The client says how long it will wait; answering just before that keeps the
+            // error message ours instead of a bare client-side abort.
+            int timeoutMs = request.TimeoutMs > 0
+                ? Math.Min(Math.Max(request.TimeoutMs, MinTimeoutMs), MaxTimeoutMs)
+                : DefaultTimeoutMs;
+            BridgeResponse response = effective.WaitForResponse(timeoutMs);
+            if (response != null)
+            {
+                return response;
+            }
+            if (effective.TryAbandon())
+            {
+                // Never picked up, so it will not run later behind the client's back.
+                return BridgeResponse.Error(503,
+                    $"simulation thread did not pick the request up within {timeoutMs / 1000}s (game still loading, or bridge " +
+                    "system disabled); it was NOT executed and is safe to retry");
+            }
+            response = effective.Response;
+            if (response != null)
+            {
+                return response;
+            }
+            return BridgeResponse.Error(504,
+                $"the game started {request.Path} but did not finish it within {timeoutMs / 1000}s; it may still complete. " +
+                "Do not repeat it blindly: retry with the same " + RequestIdHeader + " to receive its result, or check the city state first");
+        }
+
+        private BridgeRequest ResolveRecent(BridgeRequest request)
+        {
+            DateTime now = DateTime.UtcNow;
+            lock (m_Recent)
+            {
+                if (m_Recent.Count > 64)
+                {
+                    var expired = new List<string>();
+                    foreach (KeyValuePair<string, KeyValuePair<DateTime, BridgeRequest>> entry in m_Recent)
+                    {
+                        if ((now - entry.Value.Key).TotalSeconds > RecentRequestLifetimeSeconds)
+                        {
+                            expired.Add(entry.Key);
+                        }
+                    }
+                    foreach (string key in expired)
+                    {
+                        m_Recent.Remove(key);
+                    }
+                }
+                if (m_Recent.TryGetValue(request.RequestId, out KeyValuePair<DateTime, BridgeRequest> known)
+                    && !known.Value.IsAbandoned
+                    && known.Value.Path == request.Path
+                    && (now - known.Key).TotalSeconds <= RecentRequestLifetimeSeconds)
+                {
+                    return known.Value;
+                }
+                m_Recent[request.RequestId] = new KeyValuePair<DateTime, BridgeRequest>(now, request);
+                return request;
+            }
         }
 
         private bool IsLoopbackHost(string host)
@@ -282,6 +356,14 @@ namespace CS2MCP
                 else if (name.Equals(TokenHeader, StringComparison.OrdinalIgnoreCase))
                 {
                     request.Token = value;
+                }
+                else if (name.Equals(RequestIdHeader, StringComparison.OrdinalIgnoreCase))
+                {
+                    request.RequestId = value.Length <= 128 ? value : null;
+                }
+                else if (name.Equals(TimeoutHeader, StringComparison.OrdinalIgnoreCase))
+                {
+                    int.TryParse(value, out request.TimeoutMs);
                 }
             }
 

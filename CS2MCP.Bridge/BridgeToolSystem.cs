@@ -111,7 +111,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueuePlacement(Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -129,7 +129,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueueRoad(Entity prefabEntity, PrefabBase prefab, float3 start, float3 end, float3 mid, bool hasMid, float2 elevations, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -151,7 +151,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueueUpgrade(Entity target, string label, CompositionFlags upgradeFlags, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -172,7 +172,7 @@ namespace CS2MCP
         /// </summary>
         public bool TryQueueNodeUpgrade(Entity node, string label, CompositionFlags finalFlags, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -189,7 +189,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueueDemolish(Entity target, string label, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -205,7 +205,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueueArea(Entity prefabEntity, PrefabBase prefab, float3[] polygonNodes, BridgeRequest request, bool dryRun = false)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -227,7 +227,7 @@ namespace CS2MCP
         /// </summary>
         public bool TryQueueMove(Entity target, string label, float3 position, quaternion rotation, bool dryRun, BridgeRequest request)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -253,7 +253,7 @@ namespace CS2MCP
         /// </summary>
         public bool TryQueueServiceUpgrade(Entity owner, Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation, bool dryRun, BridgeRequest request)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -281,7 +281,7 @@ namespace CS2MCP
             float3 target, float seconds, bool dryRun, BridgeRequest request, out string error)
         {
             error = null;
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 error = "another build operation is in progress, retry shortly";
                 return false;
@@ -313,7 +313,7 @@ namespace CS2MCP
         private void Activate()
         {
             m_Stage = Stage.CreateDefinitions;
-            m_PreviousTool = m_ToolSystem.activeTool;
+            m_PreviousTool = BridgeTools.PreviousTool(m_ToolSystem);
             m_ToolSystem.activeTool = this;
         }
 
@@ -437,10 +437,18 @@ namespace CS2MCP
                     }
 
                     case Stage.Apply:
-                        if (GetAllowApply())
+                        // The apply systems only commit Temp entities: with no preview there is
+                        // nothing to apply, so this must not report success (the dry run agrees).
+                        if (GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter)
                         {
                             applyMode = ApplyMode.Apply;
                             CompletePending(BuildSuccessResponse());
+                        }
+                        else if (m_TempQuery.IsEmptyIgnoreFilter)
+                        {
+                            applyMode = ApplyMode.Clear;
+                            CompletePending(BridgeResponse.Error(409,
+                                "the game produced no preview for this operation (invalid target or position); nothing was changed"));
                         }
                         else
                         {

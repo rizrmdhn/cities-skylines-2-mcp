@@ -115,12 +115,17 @@ namespace CS2MCP
                 }
                 if (ServiceFeeSystem.TryGetFee(resource, fees, out float fee))
                 {
-                    int3 limits = feeSystem.GetServiceFees(resource);
+                    // GetServiceFees is the fee money collected (internal / export / import), not a range;
+                    // the slider range comes from the fee parameters (0..m_Max).
+                    int3 collected = feeSystem.GetServiceFees(resource);
+                    bool hasRange = TryGetFeeParameters(resource, out FeeParameters parameters);
                     result[resource.ToString()] = new
                     {
                         fee,
                         estimatedMonthlyIncome = feeSystem.GetServiceFeeIncomeEstimate(resource, fee),
-                        sliderRange = new { min = limits.x, max = limits.y, defaultValue = limits.z },
+                        sliderRange = hasRange ? new { min = 0f, max = parameters.m_Max, defaultValue = parameters.m_Default } : null,
+                        adjustable = hasRange && parameters.m_Adjustable,
+                        collected = new { @internal = collected.x, export = collected.y, import = collected.z },
                     };
                 }
             }
@@ -152,13 +157,50 @@ namespace CS2MCP
             {
                 return BridgeResponse.Error(400, $"resource '{resource}' has no adjustable fee in this city");
             }
-            ServiceFeeSystem.SetFee(resource, fees, fee);
+            // Keep the fee inside the range the Economy panel's slider allows (0..max).
+            bool hasRange = TryGetFeeParameters(resource, out FeeParameters parameters);
+            if (hasRange && !parameters.m_Adjustable)
+            {
+                return BridgeResponse.Error(409, $"the fee for '{resource}' is not adjustable in this game");
+            }
+            float applied = hasRange && parameters.m_Max > 0f ? math.clamp(fee, 0f, parameters.m_Max) : math.max(fee, 0f);
+            ServiceFeeSystem.SetFee(resource, fees, applied);
             return BridgeResponse.Json(new
             {
                 resource = resource.ToString(),
                 previousFee = previous,
-                newFee = fee,
+                requestedFee = fee,
+                newFee = applied,
+                sliderRange = hasRange ? new { min = 0f, max = parameters.m_Max } : null,
+                clamped = applied != fee,
             });
+        }
+
+        private EntityQuery m_FeeParameterQuery;
+        private bool m_FeeParameterQueryCreated;
+
+        /// <summary>Default, maximum and adjustability of a service fee, as the Economy panel's slider uses them.</summary>
+        private bool TryGetFeeParameters(PlayerResource resource, out FeeParameters parameters)
+        {
+            parameters = default;
+            if (!m_FeeParameterQueryCreated)
+            {
+                m_FeeParameterQuery = EntityManager.CreateEntityQuery(ComponentType.ReadOnly<ServiceFeeParameterData>());
+                m_FeeParameterQueryCreated = true;
+            }
+            if (m_FeeParameterQuery.IsEmptyIgnoreFilter)
+            {
+                return false;
+            }
+            try
+            {
+                parameters = m_FeeParameterQuery.GetSingleton<ServiceFeeParameterData>().GetFeeParameters(resource);
+                return parameters.m_Max > 0f || parameters.m_Default > 0f;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private BridgeResponse ListObjects(BridgeRequest request)

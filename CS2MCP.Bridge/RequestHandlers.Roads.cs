@@ -83,9 +83,14 @@ namespace CS2MCP
             Bezier4x3 bezier;
             bool smooth = request.TryGetBool("smooth", out bool rawSmooth) && rawSmooth;
             bool hasControl = request.TryGetFloat("cx", out float cx) & request.TryGetFloat("cz", out float cz);
+            bool hasSecondControl = request.TryGetFloat("c2x", out float c2x) & request.TryGetFloat("c2z", out float c2z);
             if (smooth && hasControl)
             {
                 return BridgeResponse.Error(400, "use either smooth=true or a control point cx/cz, not both");
+            }
+            if (hasSecondControl && !hasControl)
+            {
+                return BridgeResponse.Error(400, "c2x/c2z is the second control point of a cubic curve; give cx/cz as the first");
             }
             if (smooth)
             {
@@ -101,6 +106,18 @@ namespace CS2MCP
                 b.y = math.lerp(a.y, d.y, 1f / 3f);
                 c.y = math.lerp(a.y, d.y, 2f / 3f);
                 bezier = new Bezier4x3(a, b, c, d);
+            }
+            else if (hasControl && hasSecondControl)
+            {
+                // Cubic bezier with both control points given: the segment leaves the start toward
+                // cx/cz and arrives at the end from c2x/c2z (S-curves, ramps with set end directions).
+                float3 a = start.Position;
+                float3 d = end.Position;
+                bezier = new Bezier4x3(
+                    a,
+                    new float3(cx, math.lerp(a.y, d.y, 1f / 3f), cz),
+                    new float3(c2x, math.lerp(a.y, d.y, 2f / 3f), c2z),
+                    d);
             }
             else if (hasControl)
             {

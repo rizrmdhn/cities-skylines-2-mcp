@@ -76,7 +76,7 @@ namespace CS2MCP
         /// <summary>Must be called on the simulation thread.</summary>
         public bool TryQueueReshape(Entity area, Entity owner, Entity areaPrefab, PrefabBase prefab, float3[] nodes, BridgeRequest request)
         {
-            if (m_Stage != Stage.Idle)
+            if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
@@ -89,7 +89,7 @@ namespace CS2MCP
             m_Applied = false;
             m_PlaceMode = false;
             m_Stage = Stage.CreateDefinitions;
-            m_PreviousTool = m_ToolSystem.activeTool;
+            m_PreviousTool = BridgeTools.PreviousTool(m_ToolSystem);
             m_ToolSystem.activeTool = this;
             return true;
         }

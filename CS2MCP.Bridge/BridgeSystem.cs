@@ -87,6 +87,10 @@ namespace CS2MCP
             base.OnGameLoadingComplete(purpose, mode);
             m_FrameIndexAtLoad = m_SimulationSystem.frameIndex;
             SimulationHasTickedSinceLoad = false;
+            // A timed run belongs to the save it was started in: its target frame means
+            // nothing in another save (it would pause at once, or far too late).
+            SetAutoPause(0);
+            ResetSessionForNewSave();
         }
 
         [Preserve]
@@ -121,13 +125,47 @@ namespace CS2MCP
                     RunDismissesPopups = false;
                 }
             }
+            UpdateSpending();
             while (m_Pending.TryDequeue(out BridgeRequest request))
             {
-                BridgeResponse response;
+                // The listener gave up on it (timeout) before we got here: running it now
+                // would change the city after the client was told it did not happen.
+                if (!request.TryStart())
+                {
+                    continue;
+                }
+                Execute(request, batchChild: false);
+            }
+            UpdateTracked();
+            UpdateBatch();
+        }
+
+        /// <summary>
+        /// Runs one request through the guards (running batch, spending limit), the change log
+        /// and its handler. A handler returning null completes the request itself later
+        /// (screenshots at end-of-frame, build tools over the next tool frames, batches).
+        /// </summary>
+        private void Execute(BridgeRequest request, bool batchChild)
+        {
+            BridgeResponse response;
+            bool changes = HttpBridgeServer.IsMutatingPath(request.Path) && !request.IsDryRun;
+            bool spends = changes && IsSpendingPath(request.Path);
+            if (spends && !batchChild && m_Batch != null)
+            {
+                response = BridgeResponse.Error(409, "a batch / interchange build is running; retry when it has finished");
+            }
+            else if (spends && SpendingLimitReached(out string limitMessage))
+            {
+                response = BridgeResponse.Error(403, limitMessage);
+            }
+            else
+            {
+                if (changes)
+                {
+                    Track(request, batchChild);
+                }
                 try
                 {
-                    // A null response means the handler completes the request
-                    // asynchronously itself (e.g. screenshots at end-of-frame).
                     response = m_Handlers.Handle(request);
                 }
                 catch (Exception e)
@@ -135,10 +173,10 @@ namespace CS2MCP
                     Mod.Log.Warn($"error handling {request.Method} {request.Path}: {e}");
                     response = BridgeResponse.Error(500, $"{e.GetType().Name}: {e.Message}");
                 }
-                if (response != null)
-                {
-                    request.Complete(response);
-                }
+            }
+            if (response != null)
+            {
+                request.Complete(response);
             }
         }
 

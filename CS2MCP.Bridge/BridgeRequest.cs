@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 
@@ -21,6 +22,17 @@ namespace CS2MCP
         public string Host;
         public string Origin;
         public string Token;
+
+        /// <summary>Client-chosen id of a state-changing request (X-CS2MCP-Request-Id): a retry with the same id gets the first run's result.</summary>
+        public string RequestId;
+
+        /// <summary>How long the client is prepared to wait (X-CS2MCP-Timeout-Ms); 0 = server default.</summary>
+        public int TimeoutMs;
+
+        private const int StateQueued = 0;
+        private const int StateStarted = 1;
+        private const int StateAbandoned = 2;
+        private int m_State;
 
         private readonly TaskCompletionSource<BridgeResponse> m_Completion =
             new TaskCompletionSource<BridgeResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -44,6 +56,33 @@ namespace CS2MCP
             value = false;
             return Query.TryGetValue(key, out string raw) && bool.TryParse(raw, out value);
         }
+
+        /// <summary>
+        /// Simulation thread: claim the request for execution. False when the listener already
+        /// gave up on it (answered the client with a timeout), in which case it must not run.
+        /// </summary>
+        public bool TryStart()
+        {
+            return Interlocked.CompareExchange(ref m_State, StateStarted, StateQueued) == StateQueued;
+        }
+
+        /// <summary>
+        /// Listener thread, after a timeout: withdraw a request the simulation thread has not
+        /// picked up yet. False when it is already running (its effect can no longer be prevented).
+        /// </summary>
+        public bool TryAbandon()
+        {
+            return Interlocked.CompareExchange(ref m_State, StateAbandoned, StateQueued) == StateQueued;
+        }
+
+        public bool IsAbandoned => Volatile.Read(ref m_State) == StateAbandoned;
+
+        public bool IsCompleted => m_Completion.Task.IsCompleted;
+
+        /// <summary>The response once completed, else null.</summary>
+        public BridgeResponse Response => m_Completion.Task.IsCompleted ? m_Completion.Task.Result : null;
+
+        public bool IsDryRun => TryGetBool("dryRun", out bool dryRun) && dryRun;
 
         public void Complete(BridgeResponse response)
         {

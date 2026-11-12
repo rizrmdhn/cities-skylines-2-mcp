@@ -30,6 +30,45 @@ namespace CS2MCP
             set => s_ReadOnly = value;
         }
 
+        private static volatile int s_SpendingLimitThousands;
+        private static volatile bool s_SpendingResetRequested;
+
+        /// <summary>CS2MCP_SPEND_LIMIT=&lt;money&gt; in the game's environment overrides the options slider.</summary>
+        public static readonly long SpendingLimitFromEnvironment = ParseLimit(Environment.GetEnvironmentVariable("CS2MCP_SPEND_LIMIT"));
+
+        /// <summary>Options slider value, in thousands of money (0 = no limit).</summary>
+        public static int SpendingLimitThousands
+        {
+            get => s_SpendingLimitThousands;
+            set => s_SpendingLimitThousands = Math.Max(0, value);
+        }
+
+        /// <summary>Most money bridge build operations may spend per loaded save session (0 = no limit).</summary>
+        public static long SpendingLimit => SpendingLimitFromEnvironment > 0
+            ? SpendingLimitFromEnvironment
+            : s_SpendingLimitThousands * 1000L;
+
+        public static void RequestSpendingReset()
+        {
+            s_SpendingResetRequested = true;
+        }
+
+        /// <summary>Simulation thread: true once after the options page asked for a counter reset.</summary>
+        public static bool ConsumeSpendingReset()
+        {
+            if (!s_SpendingResetRequested)
+            {
+                return false;
+            }
+            s_SpendingResetRequested = false;
+            return true;
+        }
+
+        private static long ParseLimit(string value)
+        {
+            return long.TryParse(value, out long parsed) && parsed > 0 ? parsed : 0;
+        }
+
         private static bool IsTruthy(string value)
         {
             return !string.IsNullOrEmpty(value)
@@ -75,10 +114,32 @@ namespace CS2MCP
             }
         }
 
+        private int m_SpendingLimitThousands;
+
+        [SettingsUISlider(min = 0, max = 20000, step = 50, scalarMultiplier = 1, unit = Game.UI.Unit.kInteger)]
+        [SettingsUISection(kSection, kBridgeGroup)]
+        public int SpendingLimitThousands
+        {
+            get => m_SpendingLimitThousands;
+            set
+            {
+                m_SpendingLimitThousands = value;
+                BridgeOptions.SpendingLimitThousands = value;
+            }
+        }
+
+        [SettingsUIButton]
+        [SettingsUISection(kSection, kBridgeGroup)]
+        public bool ResetSpendingCounter
+        {
+            set => BridgeOptions.RequestSpendingReset();
+        }
+
         public override void SetDefaults()
         {
             BridgeEnabled = true;
             ReadOnlyMode = false;
+            SpendingLimitThousands = 0;
         }
     }
 
@@ -110,6 +171,18 @@ namespace CS2MCP
                     "When on, AI clients can read city data, the camera and screenshots, but every request that changes the game " +
                     "(building, demolishing, zoning, money, policies, simulation speed, saving) is refused. " +
                     "Setting CS2MCP_READONLY=1 for the game process forces this on."
+                },
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.SpendingLimitThousands)), "AI spending limit (thousands)" },
+                {
+                    m_Setting.GetOptionDescLocaleID(nameof(Setting.SpendingLimitThousands)),
+                    "Most money AI build requests (buildings, roads, interchanges, transit, map tiles) may spend per loaded save, " +
+                    "in thousands. 0 = no limit. Once reached, further build requests are refused until the counter is reset " +
+                    "or the save is reloaded. Setting CS2MCP_SPEND_LIMIT=<money> for the game process overrides this."
+                },
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.ResetSpendingCounter)), "Reset AI spending counter" },
+                {
+                    m_Setting.GetOptionDescLocaleID(nameof(Setting.ResetSpendingCounter)),
+                    "Sets the money counted against the AI spending limit back to zero."
                 },
             };
         }
