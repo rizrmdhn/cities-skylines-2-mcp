@@ -72,6 +72,8 @@ renderer (web/ React app, unchanged)        main process (desktop/src)
 | `src/features/trends.ts` | trend recorder + `/api/desktop/trends*` (see "Trend history") | no |
 | `src/features/notifications.ts` | native notifications driven by background polling + `/api/desktop/notifications*` (see "Notifications") | no (Electron loaded lazily) |
 | `src/features/updater.ts` | built-in feature: update check / download / install from GitHub Releases (`electron-updater`) | lazily, only when checking |
+| `src/features/startup.ts` | start with Windows: login item, `GET /api/desktop/startup` (see "Start with Windows") | lazily, only to read/write the login item |
+| `src/features/game-detect.ts` | detects Cities2.exe + the bridge, start/exit actions, `GET /api/desktop/game-detect` (see "Game detection") | no |
 
 Modules marked "no" must stay importable in plain Node: tests load them. Import Electron only with `import type` there.
 
@@ -260,6 +262,68 @@ Settings (also in `GET/POST /api/desktop/settings`): `overlay.enabled` (boolean,
 **Tray.** The overlay adds "Show overlay" / "Hide overlay" (with the shortcut shown next to it) to the tray menu through `contributeToTrayMenu` (see "System tray"); it is disabled while the overlay is off. No tray feature, no item.
 
 Exports for tests and reuse: `createOverlay(platformFactory)` (inject a fake `OverlayPlatform` for `register` / `unregister` / `workAreas` / `primaryWorkArea`; the default loads Electron lazily), `isValidAccelerator`, `placeOverlay`, `OVERLAY_*` constants.
+
+## Start with Windows (`src/features/startup.ts`)
+
+Registers the packaged app as a login item so the companion can wait in the tray from sign-in on. The tray's "Start with Windows" checkbox, the **Start with Windows** card of the Settings page and `POST /api/desktop/settings` all end up in the same setting.
+
+**Settings.** `startup.openAtLogin` (boolean, default false; exactly the key the tray looks for) and `startup.startHidden` (boolean, default true). A change of `openAtLogin` is applied in an `onChange` listener with `app.setLoginItemSettings({ openAtLogin, path: process.execPath, args: ["--hidden"] })` (`args: []` when `startHidden` is off; changing `startHidden` while the login item is on rewrites it). With `--hidden` the main window is not created (`ctx.launch.hidden`); the tray is the way back.
+
+**Only in the installed app.** `supported` is `ctx.isPackaged && platform === "win32"`. Otherwise a login item would start a bare `electron.exe`, so the schema of `startup.openAtLogin` **refuses `true`** with "only available in the installed app": the tray click is logged, the settings page shows the switches disabled with that reason, and nothing is ever written to the registry in a development run.
+
+**Path and updates.** The entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value name = the AppUserModelID `com.cs2mcp.companion`) points at `process.execPath`. The NSIS per-user installer installs to `%LOCALAPPDATA%\Programs\CS2MCP Companion\CS2MCP Companion.exe` and an update (the installer run again, or the updater) replaces the files in that folder, so the path stays and the entry survives. Cases that change the path: the app was installed to another folder (the installer lets the user choose), or the zip build was moved. This exe then finds no entry of its own, the setting reads as off, and turning it on writes the entry again (same value name, so the old one is overwritten). Not handled: the uninstaller does not remove the Run entry (the registry value is ours, electron-builder does not know it); a stale entry after uninstalling points at a missing exe and Windows ignores it. The packaging config could delete `HKCU\...\Run\com.cs2mcp.companion` in a custom NSIS `customUnInstall` macro.
+
+**Reconciling at start (`onReady`).** The stored setting is compared with the real state from `app.getLoginItemSettings({ path, args })` (`openAtLogin`, `executableWillLaunchAtLogin`, `launchItems`):
+
+| Windows says | meaning | setting becomes |
+| --- | --- | --- |
+| `enabled` | entry for this exe with these arguments, approved | on |
+| `other-arguments` | approved entry for this exe with other arguments | on; entry rewritten with the current arguments |
+| `disabled-in-windows` | entry exists but is switched off in Task Manager > Startup apps / Windows Settings | off (the entry is left alone; turning the setting on again re-registers it and clears the flag) |
+| `not-registered` | no entry for this exe | off |
+
+The change of the setting during reconciling does not write the registry again. A failed write (policy, locked-down registry) is logged, kept as `error` in the route and followed by a read-back so the setting shows the truth. The outcome is logged (`start with Windows: …`) and returned as `reconciled`.
+
+| route | answer |
+| --- | --- |
+| `GET /api/desktop/startup` | `{ "supported": true, "reason": null, "openAtLogin": true, "startHidden": true, "system": "enabled", "executablePath": "<exe>", "arguments": ["--hidden"], "startedHidden": true, "reconciled": { "at": 1731400000000, "outcome": "in sync (on)" }, "error": null }`. `system` is read from Windows at every call (`null` when not supported); `startedHidden` is `ctx.launch.hidden` of this run |
+
+Exports for tests and reuse: `createStartup(factory)` (inject a fake `LoginItems` with `get` / `set`; the default loads Electron lazily), `classifyLoginItem`.
+
+## Game detection (`src/features/game-detect.ts`)
+
+Knows whether Cities: Skylines II runs, so the companion can sit in the tray and come forward when the game starts. Windows only (`supported: false` elsewhere: nothing is checked, not even the bridge).
+
+**Two cheap signals, no native module.**
+- *Process:* `%SystemRoot%\System32\tasklist.exe /FI "IMAGENAME eq Cities2.exe" /FO CSV /NH` through `execFile` (`windowsHide`, 5 s timeout, full path so nothing earlier on `PATH` wins). The output is read as CSV rows whose first column is the image name, never by the "no tasks" message (Windows localizes it). A failing `tasklist` keeps the last known answer (`processError` in the route) instead of flapping the state.
+- *Bridge:* `GET /ping` through `ctx.bridge`. Any answer counts as reachable, also a 401 or 5xx (something is there); only "unreachable" does not.
+
+**States.** `not-running` (no process, bridge silent), `starting` (process up, bridge not answering yet), `running` (both), `bridge-only` (the bridge answers but no process was found: another exe name, or a bridge URL on another machine; the bridge is trusted), `unknown` (enabled, first check pending), `disabled` (`gameDetect.enabled` off), `unsupported` (not Windows). The game is "up" (`active`) in `starting`, `running` and `bridge-only`.
+
+**Interval.** `gameDetect.intervalSeconds`, default 10 (2 to 300). While the main window is visible and the state is `running` the page polls the bridge itself, so checks run 3x less often (30 s by default). Checks never overlap and are skipped while disabled. A tick costs one `tasklist` (tens of milliseconds) and one `/ping`.
+
+**Actions on transitions** (inactive to active = start, active to inactive = exit). The first observation after the companion started only sets the baseline: opening the companion while the game already runs, or starting it at login before the game, never fires an action for what was already there. An exit needs 2 inactive checks in a row (20 s by default), so a bridge that times out for a moment while a save loads is not mistaken for an exit.
+
+| setting | default | does |
+| --- | --- | --- |
+| `gameDetect.enabled` | true | the whole feature; turning it off clears the baseline |
+| `gameDetect.intervalSeconds` | 10 | see above |
+| `gameDetect.processName` | null (= `Cities2.exe`) | executable to look for; must look like `Name.exe` (it is passed to `tasklist` as one argument, never through a shell) |
+| `gameDetect.showWindowOnStart` | false | shows the main window when the game starts. An existing hidden window is shown *without* taking the focus (the game pauses while unfocused); a window that has to be created gets the focus, there is no way around that |
+| `gameDetect.showOverlayOnStart` | false | shows the overlay (see below) |
+| `gameDetect.onExit` | `"nothing"` | `"hide"`: hide the main window and close the overlay, only when a tray icon exists to come back from (otherwise the window is left alone and the reason is logged); `"quit"`: `ctx.quit()` |
+
+**Overlay without importing it.** Features can call each other's routes in process: `ctx.routes.dispatch({ method: "POST", pathname: "/api/desktop/overlay/show", searchParams: new URLSearchParams(), bodyText: "" })` runs the same handler the page would reach. Game detection checks `ctx.routes.list()` first, so without the overlay feature (or the tray) the action is simply skipped. The overlay's own `overlay.enabled` still applies (a 409 is logged).
+
+| route | answer |
+| --- | --- |
+| `GET /api/desktop/game-detect` | `{ "supported": true, "enabled": true, "state": "running", "active": true, "processName": "Cities2.exe", "processFound": true, "bridgeReachable": true, "lastChange": 1731400000000, "lastCheck": 1731400010000, "nextCheckAt": 1731400040000, "processError": null }` (`processFound` / `bridgeReachable` are `null` until known) |
+
+**For other features** (module-level, no I/O): `import { getGameState, onGameStateChange } from "./game-detect.ts"`. `getGameState()` returns the last status above (before the feature started or after quit: `state: "unknown"`, `supported: false`); `onGameStateChange((status, previousState) => …)` is called whenever `state` changes (not on every check) and returns an unsubscribe function. The state is a plain "is the game up" signal; for details of the city use the bridge. Order of features does not matter; read it from `onReady` or later.
+
+Settings (also in `GET/POST /api/desktop/settings`, keys are `gameDetect.*` although the feature id is `game-detect`); the **Game detection** card of the Settings page edits them and shows the current state. Exports for tests and reuse: `createGameDetect(probe)` (inject a fake `ProcessProbe`), `parseTasklist`, `deriveState`, `nextCheckDelayMs`, `getGameState`, `onGameStateChange`.
+
+Typical setup: turn on *Start with Windows* (starts hidden in the tray), then *Show the companion when the game starts* and, if wanted, *Show the overlay when the game starts* and *Hide to the tray* on exit.
 
 ## Adding a feature
 
@@ -548,7 +612,7 @@ Behaviour you get for free: optimistic update with rollback of just that key whe
   `ctx.onMainWindowCreated((win) => win.on("close", (e) => { if (!ctx.isQuitting()) { e.preventDefault(); win.hide() } }))`. Tray "Open" → `ctx.showMainWindow()`, "Quit" → `ctx.quit()`. Icon: `ctx.paths.icon` (or files you add under `assets/`, copied to `dist/assets`).
 - **Overlay window**: done, see "Overlay". The recipe it started from: `ctx.createWindow({ route: "/overlay", width: 360, height: 220, alwaysOnTop: true, frame: false, skipTaskbar: true })`. The page is a normal TanStack route in `web/src/routes/` (the SPA fallback serves it). Global hotkey: `globalShortcut.register` in `onReady`, `globalShortcut.unregisterAll()` in `onBeforeQuit`.
 - **Background polling / notifications / trend recorder**: `ctx.bridge.get(...)` from a timer started in `onReady`; it works with no window open. Only the allowlisted read-only routes are reachable (`ctx.bridge.get` is GET only; `ctx.bridge.control` sends a control POST through the same allowlist, for explicit user actions only). Files go under `ctx.paths.userData`. Windows toast notifications use the AppUserModelID set by the core. Done for notifications, see "Notifications".
-- **Start with Windows / hidden start**: `app.setLoginItemSettings({ openAtLogin, args: ["--hidden"] })`; with `--hidden` the main window is not created (`ctx.launch.hidden`), so pair it with the tray. In dev, the login item would start bare `electron.exe`: only enable it when `ctx.isPackaged`. Define the boolean setting `startup.openAtLogin` and the tray menu shows a "Start with Windows" checkbox for it.
+- **Start with Windows / hidden start**: done, see "Start with Windows" and "Game detection". The recipe it follows: `app.setLoginItemSettings({ openAtLogin, args: ["--hidden"] })`; with `--hidden` the main window is not created (`ctx.launch.hidden`), so pair it with the tray. In dev, the login item would start bare `electron.exe`: only enable it when `ctx.isPackaged`. Define the boolean setting `startup.openAtLogin` and the tray menu shows a "Start with Windows" checkbox for it.
 - **Settings page**: exists (see "The settings page and adding a settings section"); give your feature a section there instead of a page of your own.
 - **Packaging / auto-update**: done, see "Packaging, releases and updates". Keep `desktop/package.json` `version` equal to `web/package.json` (a test enforces it).
 
