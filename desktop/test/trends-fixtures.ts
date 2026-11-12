@@ -104,6 +104,9 @@ export function fakeBridge(game: FakeGame): BridgeClient {
       })()
       return answer as T
     },
+    async control() {
+      return fail(405, "bridge", "the recorder never sends control requests")
+    },
   }
 }
 
