@@ -204,10 +204,14 @@ describe("settings routes", () => {
     expect(bad.status).toBe(400)
     expect(bad.body).toMatchObject({ status: 400, kind: "companion" })
     expect(String(bad.body.error)).toContain("bridgeUrl")
+    expect(bad.body.issues).toEqual([{ key: "bridgeUrl", message: "must be an http:// or https:// URL" }])
     expect(t.core.token.get()).toBeNull()
 
     expect((await t.request("POST", "/api/desktop/settings", { "window.main": null })).status).toBe(400)
-    expect((await t.request("POST", "/api/desktop/settings", { surprise: 1 })).status).toBe(400)
+    const unknown = await t.request<Record<string, unknown>>("POST", "/api/desktop/settings", { surprise: 1 })
+    expect(unknown).toMatchObject({ status: 400, body: { issues: [{ key: "surprise", message: "unknown setting" }] } })
+    const notObject = await t.request<Record<string, unknown>>("POST", "/api/desktop/settings", [1])
+    expect(notObject.body.issues).toEqual([{ key: null, message: "expected a JSON object of settings" }])
   })
 })
 

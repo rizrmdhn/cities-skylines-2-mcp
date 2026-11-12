@@ -4,7 +4,7 @@ import {
   Outlet,
   useMatchRoute,
 } from "@tanstack/react-router"
-import { ActivityIcon, LayoutDashboardIcon, MapIcon, type LucideIcon } from "lucide-react"
+import { ActivityIcon, LayoutDashboardIcon, MapIcon, SettingsIcon, type LucideIcon } from "lucide-react"
 
 import { ConnectionAlerts, ConnectionBadge } from "@/components/connection-status"
 import { SimControls } from "@/components/sim-controls"
@@ -17,6 +17,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { useConnection } from "@/lib/connection"
+import { useDesktop } from "@/lib/desktop"
 import type { RouterContext } from "@/router"
 
 export const Route = createRootRouteWithContext<RouterContext>()({
@@ -30,11 +31,17 @@ const NAV: { to: "/" | "/activity" | "/map"; label: string; icon: LucideIcon }[]
   { to: "/map", label: "Map", icon: MapIcon },
 ]
 
+/** Pages that exist only in the desktop app. */
+const DESKTOP_NAV: { to: "/settings"; label: string; icon: LucideIcon }[] = [
+  { to: "/settings", label: "Settings", icon: SettingsIcon },
+]
+
 function NavLinks() {
   const matchRoute = useMatchRoute()
+  const { isDesktop } = useDesktop()
   return (
     <nav aria-label="Main" className="flex items-center gap-1">
-      {NAV.map(({ to, label, icon: Icon }) => {
+      {(isDesktop ? [...NAV, ...DESKTOP_NAV] : NAV).map(({ to, label, icon: Icon }) => {
         const active = Boolean(matchRoute({ to }))
         return (
           <Link

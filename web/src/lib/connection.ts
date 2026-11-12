@@ -32,6 +32,37 @@ function baseVersion(version: string) {
   return version.split("+", 1)[0].trim()
 }
 
+/** Whether the mod and this app were built from different versions. */
+export function isVersionMismatch(modVersion: string | undefined) {
+  return modVersion !== undefined && baseVersion(modVersion) !== baseVersion(APP_VERSION)
+}
+
+/** The answers (or errors) of /ping and /state; state is only asked once ping says the bridge is up. */
+export interface ConnectionProbe {
+  ping: Ping | undefined
+  pingError: Error | null
+  state: GameState | undefined
+  stateError: Error | null
+}
+
+/** The status the answers of /ping and /state amount to (shared by the header and the settings page). */
+export function connectionStatusOf({ ping, pingError, state, stateError }: ConnectionProbe): {
+  status: ConnectionStatus
+  error: string | undefined
+} {
+  if (pingError) return { status: "unreachable", error: pingError.message }
+  if (!ping) return { status: "checking", error: undefined }
+  if (!ping.bridgeEnabled) return { status: "disabled", error: undefined }
+  if (ping.isLoading) return { status: "loading", error: undefined }
+  if (stateError instanceof ApiError && stateError.status === 401) {
+    return { status: "unauthorized", error: stateError.message }
+  }
+  if (state && !state.cityLoaded) return { status: "no-city", error: undefined }
+  if (state?.cityLoaded) return { status: "ready", error: undefined }
+  if (stateError) return { status: "unreachable", error: stateError.message }
+  return { status: "checking", error: undefined }
+}
+
 /** Connection state derived from /ping (answers even while loading) and, once that is fine, /state. */
 export function useConnection(): Connection {
   const ping = useQuery(pingQuery())
@@ -39,30 +70,12 @@ export function useConnection(): Connection {
     ping.data !== undefined && ping.data.bridgeEnabled && !ping.data.isLoading
   const state = useQuery({ ...stateQuery(), enabled: bridgeUp })
 
-  let status: ConnectionStatus
-  let error: string | undefined
-  if (ping.isError) {
-    status = "unreachable"
-    error = ping.error.message
-  } else if (!ping.data) {
-    status = "checking"
-  } else if (!ping.data.bridgeEnabled) {
-    status = "disabled"
-  } else if (ping.data.isLoading) {
-    status = "loading"
-  } else if (state.error instanceof ApiError && state.error.status === 401) {
-    status = "unauthorized"
-    error = state.error.message
-  } else if (state.data && !state.data.cityLoaded) {
-    status = "no-city"
-  } else if (state.data?.cityLoaded) {
-    status = "ready"
-  } else if (state.isError) {
-    status = "unreachable"
-    error = state.error.message
-  } else {
-    status = "checking"
-  }
+  const { status, error } = connectionStatusOf({
+    ping: ping.data,
+    pingError: ping.error,
+    state: state.data,
+    stateError: state.error,
+  })
 
   const modVersion = ping.data?.version
   return {
@@ -72,8 +85,7 @@ export function useConnection(): Connection {
     ping: ping.data,
     state: state.data,
     modVersion,
-    versionMismatch:
-      modVersion !== undefined && baseVersion(modVersion) !== baseVersion(APP_VERSION),
+    versionMismatch: isVersionMismatch(modVersion),
     error,
   }
 }

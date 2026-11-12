@@ -7,12 +7,15 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
+import { Link } from "@tanstack/react-router"
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { APP_VERSION, type Connection, type ConnectionStatus } from "@/lib/connection"
+import { useDesktop } from "@/lib/desktop"
 
-const STATUS_LABEL: Record<ConnectionStatus, string> = {
+export const STATUS_LABEL: Record<ConnectionStatus, string> = {
   checking: "Connecting",
   unreachable: "Bridge offline",
   unauthorized: "Token rejected",
@@ -22,7 +25,7 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
   ready: "Connected",
 }
 
-const STATUS_ICON: Record<ConnectionStatus, LucideIcon> = {
+export const STATUS_ICON: Record<ConnectionStatus, LucideIcon> = {
   checking: LoaderCircleIcon,
   unreachable: PlugZapIcon,
   unauthorized: CircleAlertIcon,
@@ -68,7 +71,7 @@ export function ConnectionBadge({ connection }: { connection: Connection }) {
   )
 }
 
-const STATUS_HELP: Partial<Record<ConnectionStatus, { title: string; body: string }>> = {
+export const STATUS_HELP: Partial<Record<ConnectionStatus, { title: string; body: string }>> = {
   unreachable: {
     title: "Cannot reach the CS2 bridge",
     body: "Start Cities: Skylines II with the CS2MCP mod enabled. This page reconnects by itself.",
@@ -91,9 +94,23 @@ const STATUS_HELP: Partial<Record<ConnectionStatus, { title: string; body: strin
   },
 }
 
+/** In the desktop app the bridge URL and token are set on the settings page, not in a .env file. */
+const DESKTOP_STATUS_HELP: Partial<Record<ConnectionStatus, { title: string; body: string }>> = {
+  unreachable: {
+    title: "Cannot reach the CS2 bridge",
+    body: "Start Cities: Skylines II with the CS2MCP mod enabled, or check the bridge URL in Settings. This page reconnects by itself.",
+  },
+  unauthorized: {
+    title: "The bridge rejected the token",
+    body: "The token this app sends does not match the one set for the game. Change it in Settings; no restart needed.",
+  },
+}
+
 /** Explains why data is missing and what to do; nothing while connected or still checking. */
 export function ConnectionAlerts({ connection }: { connection: Connection }) {
-  const help = STATUS_HELP[connection.status]
+  const { isDesktop } = useDesktop()
+  const desktopHelp = isDesktop ? DESKTOP_STATUS_HELP[connection.status] : undefined
+  const help = desktopHelp ?? STATUS_HELP[connection.status]
   if (!help && !connection.versionMismatch) return null
   return (
     <div className="flex flex-col gap-2">
@@ -111,6 +128,11 @@ export function ConnectionAlerts({ connection }: { connection: Connection }) {
             {help.body}
             {connection.error && connection.status !== "unreachable" && (
               <span className="block font-mono text-xs">{connection.error}</span>
+            )}
+            {desktopHelp && (
+              <Link to="/settings" hash="connection" className="block font-medium">
+                Open connection settings
+              </Link>
             )}
           </AlertDescription>
         </Alert>

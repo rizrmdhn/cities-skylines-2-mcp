@@ -4,12 +4,15 @@ export type ApiErrorKind = "unreachable" | "bridge" | "companion"
 export class ApiError extends Error {
   readonly status: number
   readonly kind: ApiErrorKind
+  /** The parsed error body, for routes that add details (e.g. `issues` of a refused settings update). */
+  readonly body: unknown
 
-  constructor(message: string, status: number, kind: ApiErrorKind) {
+  constructor(message: string, status: number, kind: ApiErrorKind, body?: unknown) {
     super(message)
     this.name = "ApiError"
     this.status = status
     this.kind = kind
+    this.body = body
   }
 }
 
@@ -49,7 +52,8 @@ async function apiRequest<T>(url: URL, init: RequestInit): Promise<T> {
     throw new ApiError(
       error?.error ?? `HTTP ${response.status}`,
       response.status,
-      error?.kind ?? "companion"
+      error?.kind ?? "companion",
+      body
     )
   }
   return body as T

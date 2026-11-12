@@ -12,10 +12,13 @@
  *     parameters, the app's own Origin) and the UI shows the new speed; invalid control calls and
  *     other POSTs are refused before the bridge
  *   - navigating away from app://cs2mcp is blocked
- * then closes the app and checks it quit cleanly. Never talks to a real bridge on port 8642.
+ * then closes the app and checks it quit cleanly. Afterwards smoke-settings.mjs runs a second app to
+ * drive the settings page (change the bridge URL to another stub, set a token, look for leaks).
+ * Never talks to a real bridge on port 8642.
  *
  *   node scripts/smoke.mjs [--screenshot <file.png>] [--verbose]
  *   --screenshot  saves a PNG of the dashboard once it rendered
+ *   --settings-screenshots <dir>  saves PNGs of the settings page (wide/narrow, light/dark) into <dir>
  *   --verbose     prints Electron's own output even when every check passes
  */
 import { spawn } from "node:child_process"
@@ -27,6 +30,7 @@ import { fileURLToPath } from "node:url"
 
 import electronPath from "electron"
 
+import { runSettingsSmoke } from "./smoke-settings.mjs"
 import { CITY_NAME, startStubBridge } from "./stub-bridge.mjs"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
@@ -343,6 +347,9 @@ try {
     }
   }
 }
+
+// The settings page, in a second app run with its own profile and two stub bridges.
+await runSettingsSmoke({ check, electronPath, root })
 
 const failed = results.filter((r) => !r.ok)
 if (failed.length) {

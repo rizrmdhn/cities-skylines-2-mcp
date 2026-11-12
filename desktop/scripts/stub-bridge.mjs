@@ -76,12 +76,12 @@ function send(res, status, body, headers = {}) {
 }
 
 /**
- * Starts the stub on 127.0.0.1:`port` (0 = any free port). `sim` is the simulation clock
- * (selectedSpeed 0 = paused) that POST /sim/control changes, with the rules of
- * RequestHandlers.SimControl: speed is clamped to 0..8, paused=true stops the clock, paused=false
- * on a stopped clock runs it at 1.
+ * Starts the stub on 127.0.0.1:`port` (0 = any free port). `cityName` renames its city (to tell
+ * two stubs apart). `sim` is the simulation clock (selectedSpeed 0 = paused) that POST
+ * /sim/control changes, with the rules of RequestHandlers.SimControl: speed is clamped to 0..8,
+ * paused=true stops the clock, paused=false on a stopped clock runs it at 1.
  */
-export function startStubBridge(port = 0) {
+export function startStubBridge(port = 0, { cityName = CITY_NAME } = {}) {
   /** @type {{ method: string, url: string, headers: import("node:http").IncomingHttpHeaders }[]} */
   const requests = []
   const sim = { selectedSpeed: 1 }

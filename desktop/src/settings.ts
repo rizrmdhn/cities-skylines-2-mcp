@@ -91,12 +91,21 @@ export interface SettingsStore {
   flush(): Promise<void>
 }
 
+/** One rejected entry of an update: the setting key (null when the body as a whole is wrong). */
+export interface SettingIssue {
+  key: string | null
+  message: string
+}
+
 export class SettingsValidationError extends Error {
   readonly issues: string[]
-  constructor(issues: string[]) {
+  /** The same issues per setting key; the 400 answer of POST /api/desktop/settings carries them. */
+  readonly fields: SettingIssue[]
+  constructor(issues: string[], fields: SettingIssue[] = []) {
     super(issues.join("; "))
     this.name = "SettingsValidationError"
     this.issues = issues
+    this.fields = fields
   }
 }
 
@@ -138,6 +147,13 @@ function describeIssues(key: string, error: z.ZodError) {
   return error.issues.map((issue) =>
     issue.path.length ? `${key}.${issue.path.join(".")}: ${issue.message}` : `${key}: ${issue.message}`
   )
+}
+
+function fieldIssues(key: string, error: z.ZodError): SettingIssue[] {
+  return error.issues.map((issue) => ({
+    key,
+    message: issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message,
+  }))
 }
 
 interface Entry {
@@ -261,7 +277,9 @@ export async function openSettingsStore(options: OpenSettingsOptions = {}): Prom
 
   function validate(key: string, entry: Entry, value: unknown): unknown {
     const result = entry.definition.schema.safeParse(value)
-    if (!result.success) throw new SettingsValidationError(describeIssues(key, result.error))
+    if (!result.success) {
+      throw new SettingsValidationError(describeIssues(key, result.error), fieldIssues(key, result.error))
+    }
     return result.data
   }
 
@@ -361,20 +379,28 @@ export async function openSettingsStore(options: OpenSettingsOptions = {}): Prom
     },
 
     async update(patch) {
-      if (!isPlainObject(patch)) throw new SettingsValidationError(["expected a JSON object of settings"])
+      if (!isPlainObject(patch)) {
+        const message = "expected a JSON object of settings"
+        throw new SettingsValidationError([message], [{ key: null, message }])
+      }
       const issues: string[] = []
+      const fields: SettingIssue[] = []
       const accepted: [Entry, unknown][] = []
       for (const [key, value] of Object.entries(patch)) {
         const entry = entries.get(key)
         if (!entry || entry.definition.expose === false) {
           issues.push(`unknown setting: ${key}`)
+          fields.push({ key, message: "unknown setting" })
           continue
         }
         const result = entry.definition.schema.safeParse(value)
         if (result.success) accepted.push([entry, result.data])
-        else issues.push(...describeIssues(key, result.error))
+        else {
+          issues.push(...describeIssues(key, result.error))
+          fields.push(...fieldIssues(key, result.error))
+        }
       }
-      if (issues.length) throw new SettingsValidationError(issues)
+      if (issues.length) throw new SettingsValidationError(issues, fields)
       const notifications = accepted.map(([entry, value]) => apply(entry, value, true))
       const written = persist()
       for (const notifyChange of notifications) notifyChange?.()
