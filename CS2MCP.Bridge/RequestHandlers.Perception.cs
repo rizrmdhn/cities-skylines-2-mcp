@@ -241,6 +241,40 @@ namespace CS2MCP
                     return BridgeResponse.Error(400, $"unknown layer '{layer}'");
             }
 
+            if (request.TryGetFloat("x", out float cropX) && request.TryGetFloat("z", out float cropZ))
+            {
+                float cropRadius = request.TryGetFloat("radius", out float rawCropRadius) ? math.clamp(rawCropRadius, 8f, 2000f) : 150f;
+                float cell = kWorldHalfSize * 2f / sourceSize;
+                int colMin = math.clamp((int)math.floor((cropX - cropRadius + kWorldHalfSize) / cell), 0, sourceSize - 1);
+                int colMax = math.clamp((int)math.floor((cropX + cropRadius + kWorldHalfSize) / cell), 0, sourceSize - 1);
+                int rowMin = math.clamp((int)math.floor((cropZ - cropRadius + kWorldHalfSize) / cell), 0, sourceSize - 1);
+                int rowMax = math.clamp((int)math.floor((cropZ + cropRadius + kWorldHalfSize) / cell), 0, sourceSize - 1);
+                int cols = colMax - colMin + 1;
+                int rows = rowMax - rowMin + 1;
+                var cropped = new List<float>(cols * rows);
+                for (int row = rowMin; row <= rowMax; row++)
+                {
+                    for (int col = colMin; col <= colMax; col++)
+                    {
+                        cropped.Add(values[row * sourceSize + col]);
+                    }
+                }
+                return BridgeResponse.Json(new
+                {
+                    layer,
+                    textureSize = sourceSize,
+                    cellSize = cell,
+                    unit,
+                    crop = new { x = cropX, z = cropZ, radius = cropRadius },
+                    cols,
+                    rows,
+                    originX = -kWorldHalfSize + colMin * cell,
+                    originZ = -kWorldHalfSize + rowMin * cell,
+                    note = "cropped square, row-major: index = r*cols + c; world x = originX+(c+0.5)*cellSize, world z = originZ+(r+0.5)*cellSize",
+                    values = cropped,
+                });
+            }
+
             return BridgeResponse.Json(new
             {
                 layer,

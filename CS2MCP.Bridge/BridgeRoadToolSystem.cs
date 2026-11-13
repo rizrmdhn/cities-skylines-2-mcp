@@ -45,6 +45,12 @@ namespace CS2MCP
             CreateDefinitions,
             Apply,
             Finish,
+            // replace=true (connect only): drop the blocked preview, demolish the blocking buildings
+            // through the bulldoze pipeline, then preview the road again.
+            ReplaceClear,
+            ReplaceDemolish,
+            ReplaceApply,
+            ReplaceSettle,
         }
 
         private enum Mode
@@ -68,6 +74,14 @@ namespace CS2MCP
         private bool m_Applied;
         private bool m_PendingDryRun;
         private EntityQuery m_TempQuery;
+        private EntityQuery m_DefinitionQuery;
+        private bool m_PendingReplace;
+        private bool m_ReplaceDone;
+        private int m_ReplaceWait;
+        private List<Entity> m_ReplaceTargets;
+        private readonly List<ImpactEntry> m_ReplaceDemolished = new List<ImpactEntry>();
+        private BuildImpact m_ReplaceBlockedImpact;
+        private BuildImpact m_AppliedImpact;
 
         private EntityQuery m_IconQuery;
         private EntityQuery m_EdgeQuery;
@@ -85,6 +99,7 @@ namespace CS2MCP
                 ComponentType.ReadOnly<Owner>(),
                 ComponentType.ReadOnly<PrefabRef>());
             m_TempQuery = GetEntityQuery(ComponentType.ReadOnly<Temp>(), ComponentType.Exclude<Deleted>());
+            m_DefinitionQuery = GetDefinitionQuery();
             m_EdgeQuery = EntityManager.CreateEntityQuery(new EntityQueryDesc
             {
                 All = new[]
@@ -119,6 +134,7 @@ namespace CS2MCP
             {
                 return false;
             }
+            m_PendingReplace = false;
             m_PendingEdges = edges;
             m_PendingMidpoints = new float3[edges.Length];
             for (int i = 0; i < edges.Length; i++)
@@ -139,12 +155,13 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread. The curve must start at start.Position and end at end.Position.</summary>
-        public bool TryQueueBuild(Entity prefabEntity, PrefabBase prefab, BuildEnd start, BuildEnd end, Bezier4x3 curve, BridgeRequest request, bool dryRun = false)
+        public bool TryQueueBuild(Entity prefabEntity, PrefabBase prefab, BuildEnd start, BuildEnd end, Bezier4x3 curve, BridgeRequest request, bool dryRun = false, bool replace = false)
         {
             if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
+            m_PendingReplace = replace;
             m_BuildStart = start;
             m_BuildEnd = end;
             m_BuildCurve = curve;
@@ -186,6 +203,7 @@ namespace CS2MCP
         [Preserve]
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
+            JobHandle result = inputDeps;
             try
             {
                 switch (m_Stage)
@@ -208,6 +226,8 @@ namespace CS2MCP
                         bool valid = GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter;
                         List<string> errors = valid ? new List<string>() : CollectTempErrors();
                         int cost = PreviewCost();
+                        BuildImpact impact = BuildImpact.Collect(EntityManager, m_PrefabSystem);
+                        bool replaceable = m_PendingReplace && m_Mode == Mode.Build && !valid && impact.CanReplace;
                         applyMode = ApplyMode.Clear;
                         CompletePending(BridgeResponse.Json(new
                         {
@@ -219,7 +239,16 @@ namespace CS2MCP
                             cost = math.max(cost, 0),
                             refund = math.max(-cost, 0),
                             errors = valid ? null : errors,
-                            note = "nothing was changed; repeat without dryRun to apply",
+                            reason = valid ? null : impact.HasBlockers ? "blocked by: " + impact.Summary() : null,
+                            willDemolish = impact.WillDemolishJson(),
+                            blockedBy = impact.BlockedByJson(),
+                            hidden = impact.Hidden,
+                            replacePlan = m_PendingReplace ? impact.ReplacePlanJson() : null,
+                            validAfterReplace = m_PendingReplace ? (object)(valid || replaceable) : null,
+                            note = m_PendingReplace
+                                ? "nothing was changed; with replace=true the listed blockers would be demolished first, then the road is built. " +
+                                  "validAfterReplace is only as far as the preview shows: the game re-validates once they are gone"
+                                : "nothing was changed; willDemolish (zoned growables) is deleted on apply, hidden trees/props are not deleted; repeat without dryRun to apply",
                         }));
                         m_Stage = Stage.Finish;
                         break;
@@ -227,10 +256,24 @@ namespace CS2MCP
 
                     case Stage.Apply:
                         // No preview means nothing would be applied: never report that as built.
+                    {
+                        BuildImpact impact = BuildImpact.Collect(EntityManager, m_PrefabSystem);
                         if (GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter)
                         {
                             applyMode = ApplyMode.Apply;
                             m_Applied = true;
+                            m_AppliedImpact = impact;
+                        }
+                        else if (m_PendingReplace && !m_ReplaceDone && m_Mode == Mode.Build && !m_TempQuery.IsEmptyIgnoreFilter && impact.CanReplace)
+                        {
+                            // Only plain overlaps with demolishable buildings stand in the way: demolish them, then build.
+                            m_ReplaceTargets = impact.ReplaceTargets();
+                            m_ReplaceDemolished.Clear();
+                            m_ReplaceDemolished.AddRange(impact.BlockedBy);
+                            m_ReplaceBlockedImpact = impact;
+                            applyMode = ApplyMode.Clear;
+                            m_Stage = Stage.ReplaceClear;
+                            break;
                         }
                         else
                         {
@@ -240,12 +283,99 @@ namespace CS2MCP
                                 errors.Add("the game produced no preview");
                             }
                             applyMode = ApplyMode.Clear;
-                            CompletePending(BridgeResponse.Error(409,
-                                OperationName + " blocked by game validation (" +
-                                (errors.Count > 0 ? string.Join(", ", errors) : "overlap, unsupported road type, protected segment...") +
-                                "); nothing was changed"));
+                            if (m_ReplaceDone)
+                            {
+                                CompletePending(BridgeResponse.ErrorWith(409,
+                                    "replace=true demolished " + m_ReplaceDemolished.Count + " building(s) but " + OperationName + " is still refused" +
+                                    (impact.HasBlockers ? " by: " + impact.Summary() : " (" + string.Join(", ", errors) + ")") +
+                                    ". The buildings are gone (see demolished); fix the remaining problem and build again",
+                                    new Dictionary<string, object>
+                                    {
+                                        ["demolished"] = DemolishedJson(new BuildImpact()),
+                                        ["blockedBy"] = impact.BlockedByJson(),
+                                        ["hidden"] = impact.Hidden,
+                                    }));
+                            }
+                            else if (impact.HasBlockers)
+                            {
+                                CompletePending(impact.RejectionResponse(OperationName));
+                            }
+                            else
+                            {
+                                CompletePending(BridgeResponse.ErrorWith(409,
+                                    OperationName + " blocked by game validation (" +
+                                    (errors.Count > 0 ? string.Join(", ", errors) : "overlap, unsupported road type, protected segment...") +
+                                    "); nothing was changed",
+                                    new Dictionary<string, object>
+                                    {
+                                        ["blockedBy"] = impact.BlockedByJson(),
+                                        ["willDemolish"] = impact.WillDemolishJson(),
+                                        ["hidden"] = impact.Hidden,
+                                        ["errors"] = errors,
+                                    }));
+                            }
                         }
                         m_Stage = Stage.Finish;
+                        break;
+                    }
+
+                    case Stage.ReplaceClear:
+                        // Drop the blocked preview; a few frames let the game remove its temp entities.
+                        result = DestroyDefinitions(m_DefinitionQuery, m_ToolOutputBarrier, inputDeps);
+                        applyMode = ApplyMode.Clear;
+                        m_ReplaceWait = 3;
+                        m_Stage = Stage.ReplaceDemolish;
+                        break;
+
+                    case Stage.ReplaceDemolish:
+                        applyMode = ApplyMode.Clear;
+                        if (--m_ReplaceWait > 0)
+                        {
+                            break;
+                        }
+                        foreach (Entity target in m_ReplaceTargets)
+                        {
+                            if (EntityManager.Exists(target) && !EntityManager.HasComponent<Deleted>(target))
+                            {
+                                BuildImpact.AddModifyDefinition(EntityManager, m_ToolOutputBarrier.CreateCommandBuffer(), target, CreationFlags.Delete, default);
+                            }
+                        }
+                        m_Stage = Stage.ReplaceApply;
+                        break;
+
+                    case Stage.ReplaceApply:
+                        if (GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter)
+                        {
+                            applyMode = ApplyMode.Apply;
+                            m_ReplaceWait = 4;
+                            m_Stage = Stage.ReplaceSettle;
+                        }
+                        else
+                        {
+                            applyMode = ApplyMode.Clear;
+                            CompletePending(BridgeResponse.ErrorWith(409,
+                                "replace=true: the game refused to demolish the blocking buildings (" + m_ReplaceBlockedImpact.Summary() +
+                                "); nothing was changed. cs2_demolish them yourself (dryRun first) and retry",
+                                new Dictionary<string, object>
+                                {
+                                    ["blockedBy"] = m_ReplaceBlockedImpact.BlockedByJson(),
+                                    ["replacePlan"] = m_ReplaceBlockedImpact.ReplacePlanJson(),
+                                }));
+                            m_Stage = Stage.Finish;
+                        }
+                        break;
+
+                    case Stage.ReplaceSettle:
+                        // The demolish preview is applied this frame; let the deletions (and the object
+                        // search tree) catch up before the road is validated again.
+                        result = DestroyDefinitions(m_DefinitionQuery, m_ToolOutputBarrier, inputDeps);
+                        applyMode = ApplyMode.Clear;
+                        if (--m_ReplaceWait > 0)
+                        {
+                            break;
+                        }
+                        m_ReplaceDone = true;
+                        m_Stage = Stage.CreateDefinitions;
                         break;
 
                     case Stage.Finish:
@@ -278,7 +408,7 @@ namespace CS2MCP
                 applyMode = ApplyMode.Clear;
                 Deactivate();
             }
-            return inputDeps;
+            return result;
         }
 
         [Preserve]
@@ -401,6 +531,21 @@ namespace CS2MCP
             };
         }
 
+        /// <summary>Everything the applied preview deleted: replaced blockers plus overlapped growables.</summary>
+        private object DemolishedJson(BuildImpact impact)
+        {
+            var list = new List<object>();
+            foreach (ImpactEntry entry in m_ReplaceDemolished)
+            {
+                list.Add(entry.ToJson("replaced"));
+            }
+            foreach (ImpactEntry entry in impact.WillDemolish)
+            {
+                list.Add(entry.ToJson("overlapped growable"));
+            }
+            return list;
+        }
+
         private BridgeResponse BuildConnectResponse()
         {
             // Segments of the new prefab lying along the course (the game may
@@ -442,6 +587,8 @@ namespace CS2MCP
             {
                 built = true,
                 prefab = m_PendingPrefab != null ? m_PendingPrefab.name : null,
+                demolished = DemolishedJson(m_AppliedImpact ?? new BuildImpact()),
+                hidden = m_AppliedImpact?.Hidden ?? 0,
                 segments,
                 start = DescribeBuiltEnd(m_BuildStart, nodes),
                 end = DescribeBuiltEnd(m_BuildEnd, nodes),
@@ -525,6 +672,8 @@ namespace CS2MCP
             {
                 replaced = m_PendingEdges.Length,
                 prefab = m_PendingPrefab != null ? m_PendingPrefab.name : null,
+                demolished = DemolishedJson(m_AppliedImpact ?? new BuildImpact()),
+                hidden = m_AppliedImpact?.Hidden ?? 0,
                 inverted = m_PendingInvert,
                 roads = replaced,
                 note = "replaced through the game's road tool pipeline (Replace mode: segments, lanes and zone blocks are " +
@@ -579,6 +728,12 @@ namespace CS2MCP
             m_PendingPrefab = null;
             m_PendingPrefabEntity = Entity.Null;
             m_Applied = false;
+            m_PendingReplace = false;
+            m_ReplaceDone = false;
+            m_ReplaceTargets = null;
+            m_ReplaceDemolished.Clear();
+            m_ReplaceBlockedImpact = null;
+            m_AppliedImpact = null;
             if (m_ToolSystem.activeTool == this)
             {
                 m_ToolSystem.activeTool = m_PreviousTool != null && m_PreviousTool != this ? m_PreviousTool : m_DefaultToolSystem;

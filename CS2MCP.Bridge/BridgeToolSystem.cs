@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Colossal.Mathematics;
 using Game;
 using Game.City;
@@ -35,6 +36,12 @@ namespace CS2MCP
             Apply,
             Terraform,
             Finish,
+            // replace=true: the blocked preview is dropped, the blocking buildings are demolished
+            // through the bulldoze pipeline, then the original operation is previewed again.
+            ReplaceClear,
+            ReplaceDemolish,
+            ReplaceApply,
+            ReplaceSettle,
         }
 
         private enum OperationKind
@@ -69,6 +76,12 @@ namespace CS2MCP
         private bool m_PendingDryRun;
         private Entity m_PendingOwner;
         private Transform m_PendingFrom;
+        private bool m_PendingReplace;
+        private bool m_ReplaceDone;
+        private int m_ReplaceWait;
+        private List<Entity> m_ReplaceTargets;
+        private readonly List<ImpactEntry> m_ReplaceDemolished = new List<ImpactEntry>();
+        private BuildImpact m_ReplaceBlockedImpact;
         private EntityQuery m_TempQuery;
         private EntityQuery m_DefinitionQuery;
         private EntityQuery m_BrushPrefabQuery;
@@ -109,12 +122,13 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueuePlacement(Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation, BridgeRequest request, bool dryRun = false)
+        public bool TryQueuePlacement(Entity prefabEntity, PrefabBase prefab, float3 position, quaternion rotation, BridgeRequest request, bool dryRun = false, bool replace = false)
         {
             if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
+            m_PendingReplace = replace;
             m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.Object;
             m_PendingPrefabEntity = prefabEntity;
@@ -127,12 +141,13 @@ namespace CS2MCP
         }
 
         /// <summary>Must be called on the simulation thread.</summary>
-        public bool TryQueueRoad(Entity prefabEntity, PrefabBase prefab, float3 start, float3 end, float3 mid, bool hasMid, float2 elevations, BridgeRequest request, bool dryRun = false)
+        public bool TryQueueRoad(Entity prefabEntity, PrefabBase prefab, float3 start, float3 end, float3 mid, bool hasMid, float2 elevations, BridgeRequest request, bool dryRun = false, bool replace = false)
         {
             if (BridgeTools.AnyBusy(World))
             {
                 return false;
             }
+            m_PendingReplace = replace;
             m_PendingDryRun = dryRun;
             m_PendingKind = OperationKind.Net;
             m_PendingPrefabEntity = prefabEntity;
@@ -393,6 +408,8 @@ namespace CS2MCP
                         bool valid = GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter;
                         applyMode = ApplyMode.Clear;
                         int cost = PreviewCost();
+                        BuildImpact impact = BuildImpact.Collect(EntityManager, m_PrefabSystem);
+                        bool replaceable = m_PendingReplace && !valid && impact.CanReplace;
                         CompletePending(BridgeResponse.Json(new
                         {
                             dryRun = true,
@@ -401,8 +418,21 @@ namespace CS2MCP
                             prefab = m_PendingPrefab != null ? m_PendingPrefab.name : m_PendingLabel,
                             cost = math.max(cost, 0),
                             refund = math.max(-cost, 0),
-                            reason = valid ? null : "blocked by game validation (overlap, water, steep terrain, no money, protected entity...)",
-                            note = "nothing was changed; repeat without dryRun to apply",
+                            reason = valid ? null : impact.HasBlockers
+                                ? "blocked by: " + impact.Summary()
+                                : "blocked by game validation (water, steep terrain, no money, protected entity...); no specific blocker could be read",
+                            position = m_PendingKind == OperationKind.Object ? new { x = m_PendingPosition.x, y = m_PendingPosition.y, z = m_PendingPosition.z } : null,
+                            rotationDegrees = m_PendingKind == OperationKind.Object ? (object)math.round(math.degrees(math.atan2(
+                                math.mul(m_PendingRotation, new float3(0f, 0f, 1f)).x, math.mul(m_PendingRotation, new float3(0f, 0f, 1f)).z))) : null,
+                            willDemolish = impact.WillDemolishJson(),
+                            blockedBy = impact.BlockedByJson(),
+                            hidden = impact.Hidden,
+                            replacePlan = m_PendingReplace ? impact.ReplacePlanJson() : null,
+                            validAfterReplace = m_PendingReplace ? (object)(valid || replaceable) : null,
+                            note = m_PendingReplace
+                                ? "nothing was changed; with replace=true the listed blockers would be demolished first, then the build runs. " +
+                                  "validAfterReplace is only as far as the preview shows: the game re-validates once they are gone"
+                                : "nothing was changed; willDemolish (zoned growables) is deleted on apply, hidden trees/props are not deleted; repeat without dryRun to apply",
                         }));
                         m_Stage = Stage.Finish;
                         break;
@@ -412,12 +442,14 @@ namespace CS2MCP
                     {
                         bool valid = GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter;
                         int cost = PreviewCost();
+                        BuildImpact impact = BuildImpact.Collect(EntityManager, m_PrefabSystem);
                         if (valid)
                         {
                             applyMode = ApplyMode.Apply;
                             CompletePending(BridgeResponse.Json(new
                             {
                                 installed = true,
+                                demolished = DemolishedJson(impact),
                                 upgrade = m_PendingLabel,
                                 building = new { index = m_PendingOwner.Index, version = m_PendingOwner.Version },
                                 position = new { x = m_PendingPosition.x, z = m_PendingPosition.z },
@@ -428,9 +460,11 @@ namespace CS2MCP
                         else
                         {
                             applyMode = ApplyMode.Clear;
-                            CompletePending(BridgeResponse.Error(409,
-                                "upgrade blocked by game validation (overlap, too far from the building, not enough money, already built...); " +
-                                "try another position or rotation (dryRun=true to probe)"));
+                            CompletePending(impact.HasBlockers
+                                ? impact.RejectionResponse("upgrade")
+                                : BridgeResponse.Error(409,
+                                    "upgrade blocked by game validation (too far from the building, not enough money, already built...); " +
+                                    "try another position or rotation (dryRun=true to probe)"));
                         }
                         m_Stage = Stage.Finish;
                         break;
@@ -439,25 +473,99 @@ namespace CS2MCP
                     case Stage.Apply:
                         // The apply systems only commit Temp entities: with no preview there is
                         // nothing to apply, so this must not report success (the dry run agrees).
-                        if (GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter)
+                    {
+                        BuildImpact impact = BuildImpact.Collect(EntityManager, m_PrefabSystem);
+                        bool previewMissing = m_TempQuery.IsEmptyIgnoreFilter;
+                        if (GetAllowApply() && !previewMissing)
                         {
                             applyMode = ApplyMode.Apply;
-                            CompletePending(BuildSuccessResponse());
+                            CompletePending(BuildSuccessResponse(impact));
                         }
-                        else if (m_TempQuery.IsEmptyIgnoreFilter)
+                        else if (previewMissing)
                         {
                             applyMode = ApplyMode.Clear;
                             CompletePending(BridgeResponse.Error(409,
-                                "the game produced no preview for this operation (invalid target or position); nothing was changed"));
+                                "the game produced no preview for this operation (invalid target or position); nothing was changed" +
+                                (m_ReplaceDone ? "; the blocking buildings listed in the earlier replace step were already demolished" : "")));
+                        }
+                        else if (m_PendingReplace && !m_ReplaceDone && impact.CanReplace
+                            && (m_PendingKind == OperationKind.Object || m_PendingKind == OperationKind.Net))
+                        {
+                            // Only plain overlaps with demolishable buildings stand in the way: demolish them, then build.
+                            m_ReplaceTargets = impact.ReplaceTargets();
+                            m_ReplaceDemolished.Clear();
+                            m_ReplaceDemolished.AddRange(impact.BlockedBy);
+                            m_ReplaceBlockedImpact = impact;
+                            applyMode = ApplyMode.Clear;
+                            m_Stage = Stage.ReplaceClear;
+                            break;
                         }
                         else
                         {
                             applyMode = ApplyMode.Clear;
-                            CompletePending(BridgeResponse.Error(409,
-                                "operation blocked by game validation (overlap, water, steep terrain, protected entity...); " +
-                                "try a different position or target"));
+                            CompletePending(m_ReplaceDone ? ReplaceStillBlocked(impact) : impact.RejectionResponse(m_PendingKind.ToString().ToLowerInvariant()));
                         }
                         m_Stage = Stage.Finish;
+                        break;
+                    }
+
+                    case Stage.ReplaceClear:
+                        // Drop the blocked preview; a few frames let the game remove its temp entities.
+                        result = DestroyDefinitions(m_DefinitionQuery, m_ToolOutputBarrier, inputDeps);
+                        applyMode = ApplyMode.Clear;
+                        m_ReplaceWait = 3;
+                        m_Stage = Stage.ReplaceDemolish;
+                        break;
+
+                    case Stage.ReplaceDemolish:
+                        applyMode = ApplyMode.Clear;
+                        if (--m_ReplaceWait > 0)
+                        {
+                            break;
+                        }
+                        foreach (Entity target in m_ReplaceTargets)
+                        {
+                            if (EntityManager.Exists(target) && !EntityManager.HasComponent<Deleted>(target))
+                            {
+                                BuildImpact.AddModifyDefinition(EntityManager, m_ToolOutputBarrier.CreateCommandBuffer(), target, CreationFlags.Delete, default);
+                            }
+                        }
+                        m_Stage = Stage.ReplaceApply;
+                        break;
+
+                    case Stage.ReplaceApply:
+                        if (GetAllowApply() && !m_TempQuery.IsEmptyIgnoreFilter)
+                        {
+                            applyMode = ApplyMode.Apply;
+                            m_ReplaceWait = 4;
+                            m_Stage = Stage.ReplaceSettle;
+                        }
+                        else
+                        {
+                            applyMode = ApplyMode.Clear;
+                            CompletePending(BridgeResponse.ErrorWith(409,
+                                "replace=true: the game refused to demolish the blocking buildings (" + m_ReplaceBlockedImpact.Summary() +
+                                "); nothing was changed. cs2_demolish them yourself (dryRun first) and retry",
+                                new Dictionary<string, object>
+                                {
+                                    ["blockedBy"] = m_ReplaceBlockedImpact.BlockedByJson(),
+                                    ["replacePlan"] = m_ReplaceBlockedImpact.ReplacePlanJson(),
+                                }));
+                            m_Stage = Stage.Finish;
+                        }
+                        break;
+
+                    case Stage.ReplaceSettle:
+                        // The demolish preview is applied this frame; let the deletions (and the object
+                        // search tree) catch up before the original operation is validated again.
+                        result = DestroyDefinitions(m_DefinitionQuery, m_ToolOutputBarrier, inputDeps);
+                        applyMode = ApplyMode.Clear;
+                        if (--m_ReplaceWait > 0)
+                        {
+                            break;
+                        }
+                        m_ReplaceDone = true;
+                        m_Stage = Stage.CreateDefinitions;
                         break;
 
                     case Stage.Finish:
@@ -535,6 +643,7 @@ namespace CS2MCP
             bool hasPreview = !m_TempQuery.IsEmptyIgnoreFilter;
             bool blocked = HasMovedObjectError(m_PendingTarget);
             bool valid = !originalDeleted && hasPreview && !blocked;
+            BuildImpact impact = BuildImpact.Collect(EntityManager, m_PrefabSystem);
 
             if (valid && !m_PendingDryRun)
             {
@@ -568,14 +677,26 @@ namespace CS2MCP
                     ? "the game produced no preview for this move"
                     : originalDeleted
                         ? "the move would delete the original building"
-                        : "the new spot is blocked by game validation (overlap, water, steep terrain, no road access, outside owned tiles...)";
+                        : impact.HasBlockers
+                            ? "the new spot is blocked by: " + impact.Summary()
+                            : "the new spot is blocked by game validation (water, steep terrain, no road access, outside owned tiles...); no specific blocker could be read";
                 if (m_PendingDryRun)
                 {
-                    CompletePending(BridgeResponse.Json(new { dryRun = true, valid = false, prefab = m_PendingLabel, entity, from, to, reason }));
+                    CompletePending(BridgeResponse.Json(new
+                    {
+                        dryRun = true, valid = false, prefab = m_PendingLabel, entity, from, to, reason,
+                        willDemolish = impact.WillDemolishJson(), blockedBy = impact.BlockedByJson(), hidden = impact.Hidden,
+                    }));
                 }
                 else
                 {
-                    CompletePending(BridgeResponse.Error(409, $"relocation refused: {reason}; try another position or rotation (dryRun=true to probe)"));
+                    CompletePending(BridgeResponse.ErrorWith(409, $"relocation refused: {reason}; try another position or rotation (dryRun=true to probe)",
+                        new Dictionary<string, object>
+                        {
+                            ["blockedBy"] = impact.BlockedByJson(),
+                            ["willDemolish"] = impact.WillDemolishJson(),
+                            ["hidden"] = impact.Hidden,
+                        }));
                 }
                 return;
             }
@@ -588,6 +709,9 @@ namespace CS2MCP
                 moved = !m_PendingDryRun,
                 dryRun = m_PendingDryRun,
                 valid = true,
+                willDemolish = m_PendingDryRun ? impact.WillDemolishJson() : null,
+                demolished = m_PendingDryRun ? null : DemolishedJson(impact),
+                hidden = impact.Hidden,
                 prefab = m_PendingLabel,
                 entity,
                 from,
@@ -702,7 +826,37 @@ namespace CS2MCP
             return false;
         }
 
-        private BridgeResponse BuildSuccessResponse()
+        /// <summary>Everything the applied preview deleted: replaced blockers plus overlapped growables.</summary>
+        private object DemolishedJson(BuildImpact impact)
+        {
+            var list = new List<object>();
+            foreach (ImpactEntry entry in m_ReplaceDemolished)
+            {
+                list.Add(entry.ToJson("replaced"));
+            }
+            foreach (ImpactEntry entry in impact.WillDemolish)
+            {
+                list.Add(entry.ToJson("overlapped growable"));
+            }
+            return list;
+        }
+
+        /// <summary>The build was refused after replace=true had already demolished the blockers.</summary>
+        private BridgeResponse ReplaceStillBlocked(BuildImpact impact)
+        {
+            return BridgeResponse.ErrorWith(409,
+                "replace=true demolished " + m_ReplaceDemolished.Count + " building(s) but the build is still refused" +
+                (impact.HasBlockers ? " by: " + impact.Summary() : " by game validation") +
+                ". The buildings are gone (see demolished); fix the remaining problem and build again",
+                new Dictionary<string, object>
+                {
+                    ["demolished"] = DemolishedJson(new BuildImpact()),
+                    ["blockedBy"] = impact.BlockedByJson(),
+                    ["hidden"] = impact.Hidden,
+                });
+        }
+
+        private BridgeResponse BuildSuccessResponse(BuildImpact impact)
         {
             switch (m_PendingKind)
             {
@@ -735,6 +889,8 @@ namespace CS2MCP
                     {
                         placed = true,
                         prefab = m_PendingPrefab != null ? m_PendingPrefab.name : null,
+                        demolished = DemolishedJson(impact),
+                        hidden = impact.Hidden,
                         start = new { x = m_PendingPosition.x, z = m_PendingPosition.z },
                         end = new { x = m_PendingEnd.x, z = m_PendingEnd.z },
                         note = "committed this frame; verify via /city/roads or /screenshot",
@@ -752,6 +908,8 @@ namespace CS2MCP
                     {
                         placed = true,
                         prefab = m_PendingPrefab != null ? m_PendingPrefab.name : null,
+                        demolished = DemolishedJson(impact),
+                        hidden = impact.Hidden,
                         position = new
                         {
                             x = m_PendingPosition.x,
@@ -771,7 +929,7 @@ namespace CS2MCP
                 // Another tool (the player's, or another bridge tool) took over mid-operation. Without this the
                 // tool stayed busy forever and every build request answered "another build operation is in
                 // progress" until the game restarted.
-                bool mayHaveApplied = m_Stage == Stage.Finish || m_Stage == Stage.Terraform;
+                bool mayHaveApplied = m_Stage == Stage.Finish || m_Stage == Stage.Terraform || m_Stage == Stage.ReplaceApply || m_Stage == Stage.ReplaceSettle;
                 CompletePending(BridgeResponse.Error(409,
                     $"{m_PendingKind} ({m_PendingLabel}) interrupted because another tool became active" +
                     (mayHaveApplied ? "; it may be partly applied, check the result before retrying" : "; nothing was applied, retry")));
@@ -795,6 +953,11 @@ namespace CS2MCP
             m_PendingPrefabEntity = Entity.Null;
             m_PendingOwner = Entity.Null;
             m_PendingDryRun = false;
+            m_PendingReplace = false;
+            m_ReplaceDone = false;
+            m_ReplaceTargets = null;
+            m_ReplaceDemolished.Clear();
+            m_ReplaceBlockedImpact = null;
             m_TerraformFramesLeft = 0;
             if (m_ToolSystem.activeTool == this)
             {
@@ -814,70 +977,7 @@ namespace CS2MCP
         /// </summary>
         private void CreateModifyDefinitions(CreationFlags flags, CompositionFlags upgrades)
         {
-            Entity target = m_PendingTarget;
-            EntityCommandBuffer commandBuffer = m_ToolOutputBarrier.CreateCommandBuffer();
-            Entity e = commandBuffer.CreateEntity();
-            var definition = new CreationDefinition
-            {
-                m_Original = target,
-                m_Flags = flags,
-            };
-            commandBuffer.AddComponent(e, default(Updated));
-            if (upgrades != default(CompositionFlags))
-            {
-                commandBuffer.AddComponent(e, new Game.Net.Upgraded { m_Flags = upgrades });
-            }
-
-            if (EntityManager.HasComponent<Game.Net.Edge>(target))
-            {
-                Game.Net.Edge edge = EntityManager.GetComponentData<Game.Net.Edge>(target);
-                NetCourse course = default;
-                course.m_Curve = EntityManager.GetComponentData<Game.Net.Curve>(target).m_Bezier;
-                course.m_Length = MathUtils.Length(course.m_Curve);
-                course.m_FixedIndex = EntityManager.HasComponent<Game.Net.Fixed>(target)
-                    ? EntityManager.GetComponentData<Game.Net.Fixed>(target).m_Index
-                    : -1;
-                course.m_StartPosition.m_Entity = edge.m_Start;
-                course.m_StartPosition.m_Position = course.m_Curve.a;
-                course.m_StartPosition.m_Rotation = NetUtils.GetNodeRotation(MathUtils.StartTangent(course.m_Curve));
-                course.m_StartPosition.m_CourseDelta = 0f;
-                course.m_EndPosition.m_Entity = edge.m_End;
-                course.m_EndPosition.m_Position = course.m_Curve.d;
-                course.m_EndPosition.m_Rotation = NetUtils.GetNodeRotation(MathUtils.EndTangent(course.m_Curve));
-                course.m_EndPosition.m_CourseDelta = 1f;
-                commandBuffer.AddComponent(e, course);
-            }
-            else if (EntityManager.HasComponent<Transform>(target))
-            {
-                Transform transform = EntityManager.GetComponentData<Transform>(target);
-                var objectDefinition = new ObjectDefinition
-                {
-                    m_Position = transform.m_Position,
-                    m_Rotation = transform.m_Rotation,
-                    m_Probability = 100,
-                    m_PrefabSubIndex = -1,
-                    m_LocalPosition = transform.m_Position,
-                    m_LocalRotation = transform.m_Rotation,
-                };
-                if (EntityManager.HasComponent<Game.Objects.Elevation>(target))
-                {
-                    Game.Objects.Elevation elevation = EntityManager.GetComponentData<Game.Objects.Elevation>(target);
-                    objectDefinition.m_Elevation = elevation.m_Elevation;
-                    objectDefinition.m_ParentMesh = Game.Objects.ObjectUtils.GetSubParentMesh(elevation.m_Flags);
-                }
-                else
-                {
-                    objectDefinition.m_ParentMesh = -1;
-                }
-                commandBuffer.AddComponent(e, objectDefinition);
-            }
-            else if (EntityManager.HasBuffer<Game.Areas.Node>(target))
-            {
-                DynamicBuffer<Game.Areas.Node> nodes = EntityManager.GetBuffer<Game.Areas.Node>(target, isReadOnly: true);
-                commandBuffer.AddBuffer<Game.Areas.Node>(e).CopyFrom(nodes.AsNativeArray());
-            }
-
-            commandBuffer.AddComponent(e, definition);
+            BuildImpact.AddModifyDefinition(EntityManager, m_ToolOutputBarrier.CreateCommandBuffer(), m_PendingTarget, flags, upgrades);
         }
 
         /// <summary>

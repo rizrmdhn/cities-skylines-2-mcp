@@ -116,6 +116,17 @@ namespace CS2MCP
             return Json(new { error = message }, status);
         }
 
+        /// <summary>An error carrying structured data (blockedBy, replacePlan...) next to the message.</summary>
+        public static BridgeResponse ErrorWith(int status, string message, IDictionary<string, object> extra)
+        {
+            var payload = new Dictionary<string, object> { ["error"] = message };
+            foreach (KeyValuePair<string, object> pair in extra)
+            {
+                payload[pair.Key] = pair.Value;
+            }
+            return Json(payload, status);
+        }
+
         public static BridgeResponse Png(byte[] png)
         {
             return new BridgeResponse { ContentType = "image/png", Body = png };

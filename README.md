@@ -171,11 +171,12 @@ The installer is per-user and does not require administrator rights. Settings an
 | `cs2_labor` | Employment, unemployment, jobs by education level, age structure |
 | `cs2_statistics` | Time series for 60+ statistics (32 samples per in-game day) |
 | `cs2_terrain` | Whole-map heightmap + water depth grid |
-| `cs2_gridmap` | Native cell-map layers: land value, ground/air/noise pollution, ground water |
+| `cs2_gridmap` | Native cell-map layers: land value, ground/air/noise pollution, ground water (optionally cropped to x/z/radius) |
+| `cs2_survey` | One-call survey of an area before building: roads and junctions, buildings (incl. which zoned ones would be auto-replaced), zoning, terrain/water, land value/pollution/noise, map tile ownership |
 | `cs2_zoning` | Zoning summary (occupied/empty per zone type) |
 | `cs2_notifications` | All in-world warning icons (no power/water, abandoned...) with target entities |
 | `cs2_traffic` | City-wide traffic flow, worst roads (flow %, volume, four daily periods) and traffic bottlenecks, with the game's own numbers |
-| `cs2_traffic_diagnose` | Why one road or junction is jammed: junction layout and lanes, vehicle types and what they wait for, through vs local traffic and destination clusters, turning movements from the vehicles' paths, parallel streets, and traffic-engineering findings with the tools to fix each |
+| `cs2_traffic_diagnose` | Why one road or junction is jammed: junction layout and lanes, vehicle types and what they wait for, through vs local traffic and destination clusters, turning movements from the vehicles' paths, queue head tracing (where the jam really starts), per-lane turns and counts, parallel streets verified as connected detours, worst-period flow, multi-sample averaging, before/after comparison, and ranked traffic-engineering findings with concrete targets and the tools to fix each |
 | `cs2_vehicles` | Census of driving vehicles by type and destination, what stopped vehicles wait for, the queue heads holding traffic up and any gridlock loops |
 | `cs2_road_graph` | Road segments of an area with their junctions, direction, flow and traffic lights (optionally every network, incl. station tracks) |
 | `cs2_inspect` | Single-entity detail (residents/employees/status flags) |

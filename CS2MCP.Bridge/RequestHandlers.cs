@@ -145,6 +145,8 @@ namespace CS2MCP
                     return GetGridMap(request);
                 case "/city/zoning":
                     return GetZoning(request);
+                case "/city/survey":
+                    return CitySurvey(request);
                 case "/city/notifications":
                     return GetNotifications(request);
                 case "/entity/inspect":

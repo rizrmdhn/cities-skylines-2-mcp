@@ -136,6 +136,7 @@ namespace CS2MCP
                 }
                 Execute(request, batchChild: false);
             }
+            m_Handlers.UpdateDiagnoseJobs();
             UpdateTracked();
             UpdateBatch();
         }
