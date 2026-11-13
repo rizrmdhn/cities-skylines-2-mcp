@@ -407,6 +407,112 @@ server.registerTool(
   },
 );
 
+const SERVICE_DISTRICT_CATEGORIES = [
+  "garbage",
+  "education",
+  "healthcare",
+  "police",
+  "fire",
+  "parks",
+  "post",
+  "communications",
+  "transportation",
+  "electricity",
+  "water",
+  "roads",
+  "landscaping",
+  "districts",
+  "zones",
+] as const;
+
+server.registerTool(
+  "cs2_service_districts",
+  {
+    title: "List service building operating districts",
+    description:
+      "The operating district (service area) of every service building, as in the building panel's district section: " +
+      "mode entireCity (no limit) or restricted (only the listed districts are served, however much spare capacity it has), " +
+      "with the served districts (entity and name), the building's prefab, position and service category. " +
+      "Use it when a district stays unserved although a building with spare capacity exists: " +
+      "per service it lists unservedDistricts (districts no building of that service reaches), and byDistrict=true adds, " +
+      "per district, the providers that do NOT reach it. Filters: service, a district (districtIndex + districtVersion, " +
+      "from cs2_list_districts) and restrictedOnly. service is a broad category: tell a landfill from a recycling center by prefab. " +
+      "Change a building's districts with cs2_set_service_districts.",
+    inputSchema: {
+      service: z
+        .array(z.enum(SERVICE_DISTRICT_CATEGORIES))
+        .optional()
+        .describe("Service categories to report (default all)"),
+      districtIndex: z.number().int().optional().describe("Only buildings serving this district (with districtVersion); entireCity buildings count as serving it"),
+      districtVersion: z.number().int().optional().describe("Version of the district entity"),
+      restrictedOnly: z.boolean().optional().describe("Only list buildings limited to specific districts"),
+      byDistrict: z.boolean().optional().describe("Per district, list the providers that do not reach it"),
+      limit: z.number().int().min(1).max(500).optional().describe("Max buildings listed per service (default 100)"),
+    },
+  },
+  async ({ service, districtIndex, districtVersion, restrictedOnly, byDistrict, limit }) => {
+    const params = new URLSearchParams();
+    if (service?.length) params.set("service", service.join(","));
+    if (districtIndex !== undefined && districtVersion !== undefined) {
+      params.set("districtIndex", String(districtIndex));
+      params.set("districtVersion", String(districtVersion));
+    } else if (districtIndex !== undefined || districtVersion !== undefined) {
+      return errorResult(new Error("provide both districtIndex and districtVersion"));
+    }
+    if (restrictedOnly) params.set("restrictedOnly", "true");
+    if (byDistrict) params.set("byDistrict", "true");
+    if (limit !== undefined) params.set("limit", String(limit));
+    const query = bridgeQueryString(params);
+    try {
+      return jsonResult(await bridgeJson(query ? `/city/service-districts?${query}` : "/city/service-districts", 20_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_set_service_districts",
+  {
+    title: "Set a service building's operating districts",
+    description:
+      "Change which districts one service building serves (the building panel's district section). " +
+      "Give exactly one way: districts = replace the list, add / remove = edit it, or mode 'entireCity' = clear the list so it " +
+      "serves the whole city. Districts are entities from cs2_list_districts. Upgrade extensions have no list of their own. " +
+      "Read the result back with cs2_service_districts.",
+    inputSchema: {
+      index: z.number().int().describe("Service building entity index"),
+      version: z.number().int().describe("Service building entity version"),
+      mode: z.enum(["entireCity"]).optional().describe("entireCity clears the district list"),
+      districts: z
+        .array(z.object({ index: z.number().int(), version: z.number().int() }))
+        .optional()
+        .describe("The complete new list of districts"),
+      add: z
+        .array(z.object({ index: z.number().int(), version: z.number().int() }))
+        .optional()
+        .describe("Districts to add to the current list"),
+      remove: z
+        .array(z.object({ index: z.number().int(), version: z.number().int() }))
+        .optional()
+        .describe("Districts to remove from the current list"),
+    },
+  },
+  async ({ index, version, mode, districts, add, remove }) => {
+    const refs = (items: { index: number; version: number }[]) => items.map((d) => `${d.index}:${d.version}`).join(";");
+    const params = new URLSearchParams({ index: String(index), version: String(version) });
+    if (mode) params.set("mode", mode);
+    if (districts) params.set("districts", refs(districts));
+    if (add?.length) params.set("add", refs(add));
+    if (remove?.length) params.set("remove", refs(remove));
+    try {
+      return jsonResult(await bridgeJson(`/city/service-districts/set?${bridgeQueryString(params)}`, 15_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
 server.registerTool(
   "cs2_economy",
   {

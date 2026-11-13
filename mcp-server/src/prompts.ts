@@ -50,6 +50,7 @@ export const GUIDE = `# Using cs2-mcp
 
 ## Typical flows
 - Service gaps: cs2_coverage -> worstGaps -> cs2_find_prefabs -> cs2_place_roadside / cs2_place_building (dryRun) -> build.
+- A district stays unserved although a service building has spare capacity: cs2_service_districts (byDistrict, or restrictedOnly) -> cs2_set_service_districts.
 - Upgrades: cs2_building_upgrades -> cs2_place_upgrade.
 - Stations: cs2_place_building or cs2_place_roadside -> cs2_building_connections -> cs2_connect_road smooth=true.
 - Moving a service building: cs2_move_building (keeps upgrades, workers and vehicles).

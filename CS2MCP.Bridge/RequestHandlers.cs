@@ -83,6 +83,10 @@ namespace CS2MCP
                     return MoveObject(request);
                 case "/city/coverage":
                     return GetCoverage(request);
+                case "/city/service-districts":
+                    return GetServiceDistricts(request);
+                case "/city/service-districts/set":
+                    return SetServiceDistricts(request);
                 case "/city/services":
                     return GetServices();
                 case "/city/labor":

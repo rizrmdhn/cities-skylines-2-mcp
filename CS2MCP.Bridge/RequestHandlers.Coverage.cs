@@ -186,6 +186,10 @@ namespace CS2MCP
             int noRoadBuildings = 0;
             var providers = new List<object>[serviceCount];
             var providerCounts = new int[serviceCount];
+            // Operating districts of the providers: a provider with no district list serves the entire city.
+            bool areaLimited = hasCenter && radius < float.MaxValue;
+            var providerEntireCity = new bool[serviceCount];
+            var providerServedDistricts = new HashSet<Entity>[serviceCount];
 
             using (NativeArray<Entity> buildings = PlacedBuildingQuery.ToEntityArray(Allocator.Temp))
             {
@@ -206,6 +210,20 @@ namespace CS2MCP
                         if (index >= 0 && index < (int)CoverageService.Count && selected[index])
                         {
                             providerCounts[index]++;
+                            if (!EntityManager.HasBuffer<Game.Areas.ServiceDistrict>(entity)
+                                || EntityManager.GetBuffer<Game.Areas.ServiceDistrict>(entity, isReadOnly: true).Length == 0)
+                            {
+                                providerEntireCity[index] = true;
+                            }
+                            else
+                            {
+                                providerServedDistricts[index] = providerServedDistricts[index] ?? new HashSet<Entity>();
+                                DynamicBuffer<Game.Areas.ServiceDistrict> served = EntityManager.GetBuffer<Game.Areas.ServiceDistrict>(entity, isReadOnly: true);
+                                for (int d = 0; d < served.Length; d++)
+                                {
+                                    providerServedDistricts[index].Add(served[d].m_District);
+                                }
+                            }
                             if (listProviders)
                             {
                                 providers[index] = providers[index] ?? new List<object>();
@@ -226,6 +244,9 @@ namespace CS2MCP
                                         position = new { x = math.round(transform.m_Position.x), z = math.round(transform.m_Position.z) },
                                         range = math.round(range),
                                         capacity = math.round(capacity),
+                                        operatingDistricts = EntityManager.HasBuffer<Game.Areas.ServiceDistrict>(entity)
+                                            && EntityManager.GetBuffer<Game.Areas.ServiceDistrict>(entity, isReadOnly: true).Length > 0
+                                            ? "restricted" : "entireCity",
                                     });
                                 }
                             }
@@ -320,6 +341,16 @@ namespace CS2MCP
                 }
             }
 
+            var districtList = new List<Entity>();
+            using (NativeArray<Entity> districtEntities = DistrictQuery.ToEntityArray(Allocator.Temp))
+            {
+                foreach (Entity district in districtEntities)
+                {
+                    districtList.Add(district);
+                }
+            }
+            Game.UI.NameSystem districtNames = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
+
             var services = new Dictionary<string, object>();
             for (int s = 0; s < serviceCount; s++)
             {
@@ -387,6 +418,8 @@ namespace CS2MCP
                     byKind,
                     providers = s == kTelecomIndex ? (int?)null : providerCounts[s],
                     providerList = s == kTelecomIndex ? null : providers[s],
+                    unservedDistricts = s == kTelecomIndex ? null : UnservedDistricts(
+                        areaLimited, providerCounts[s], providerEntireCity[s], providerServedDistricts[s], districtList, districtNames),
                     worstGaps = gaps,
                     scale,
                 };
@@ -404,6 +437,29 @@ namespace CS2MCP
                        "gapCellSize-meter cells, most residents first: good spots for a new service building. Coverage is " +
                        "recomputed by the simulation over time, so re-check after running it. Abandoned buildings are excluded.",
             });
+        }
+
+        /// <summary>
+        /// Districts that none of a service's providers reaches (their operating-district lists leave it
+        /// out). Null when it cannot be judged: the area is limited, there are no providers, or a provider
+        /// serves the entire city. See /city/service-districts for the per-building detail.
+        /// </summary>
+        private List<object> UnservedDistricts(bool areaLimited, int providerCount, bool anyEntireCity,
+            HashSet<Entity> served, List<Entity> districts, Game.UI.NameSystem names)
+        {
+            if (areaLimited || providerCount == 0 || anyEntireCity)
+            {
+                return null;
+            }
+            var unserved = new List<object>();
+            foreach (Entity district in districts)
+            {
+                if (served == null || !served.Contains(district))
+                {
+                    unserved.Add(new { entity = EntityRef(district), name = LabelOf(names, district) });
+                }
+            }
+            return unserved;
         }
 
         private int CountResidents(Entity building)
