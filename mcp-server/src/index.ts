@@ -90,8 +90,10 @@ async function bridgeJson(path: string, timeoutMs = 12_000, body?: unknown): Pro
     payload = { raw: text };
   }
   if (!res.ok) {
-    const message = (payload as { error?: string })?.error ?? `bridge returned HTTP ${res.status}`;
-    throw new BridgeError(String(message));
+    const { error, ...details } = (payload ?? {}) as { error?: string } & Record<string, unknown>;
+    const message = String(error ?? `bridge returned HTTP ${res.status}`);
+    // Structured data next to the message (blockedBy, replacePlan, demolished...) goes to the agent too.
+    throw new BridgeError(Object.keys(details).length > 0 ? `${message}\n${JSON.stringify(details, null, 2)}` : message);
   }
   return payload;
 }
@@ -658,8 +660,9 @@ server.registerTool(
       "Place a building in the world at the given map coordinates (x, z in meters; the map is roughly " +
       "-7000 to +7000 on each axis, use cs2_list_buildings to see coordinates of existing buildings for " +
       "reference). Height is sampled from the terrain automatically. The game validates the placement " +
-      "(collisions, terrain, water) and the call fails with an explanation if blocked. Costs city money " +
-      "like a normal player action. Verify the result with cs2_screenshot or cs2_list_buildings.",
+      "(collisions, terrain, water) and the call fails with an explanation if blocked. " +
+      "Validation reads the real overlap: zoned growable buildings in the way are demolished automatically on apply (listed in `willDemolish` on dryRun and `demolished` on success); trees and props are hidden, not deleted (`hidden`); service, signature and player-placed buildings, burning buildings, water and steep terrain BLOCK, and the refusal names them in `blockedBy` (prefab, kind, position, error type). Always dryRun first and read willDemolish before applying. replace=true also demolishes plain overlapping buildings that block the build (never native map buildings, outside connections or burning ones), then builds; if anything else is wrong (water, slope, money, road access) nothing is demolished and the 409 carries blockedBy plus replacePlan. Everything demolished is listed. " +
+      "Costs city money like a normal player action. Verify the result with cs2_screenshot or cs2_list_buildings.",
     inputSchema: {
       dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       prefab: z.string().describe("Exact prefab name from cs2_find_prefabs"),
@@ -667,12 +670,20 @@ server.registerTool(
       z: z.number().describe("World Z coordinate (meters)"),
       rotation: z.number().optional().describe("Rotation around Y axis in degrees (default 0)"),
       force: z.boolean().optional().describe("Place even if the prefab is milestone-locked"),
+      replace: z
+        .boolean()
+        .optional()
+        .describe(
+          "Demolish the existing buildings that block this build (plain overlaps only), then build. Default false: blockers are reported in blockedBy and nothing is demolished. " +
+            "With dryRun it lists what would be demolished (replacePlan) and validAfterReplace.",
+        ),
     },
   },
-  async ({ prefab, x, z, rotation, force, dryRun }) => {
+  async ({ prefab, x, z, rotation, force, dryRun, replace }) => {
     const params = new URLSearchParams({ prefab, x: String(x), z: String(z) });
     if (rotation !== undefined) params.set("rotation", String(rotation));
     if (force) params.set("force", "true");
+    if (replace) params.set("replace", "true");
     if (dryRun) params.set("dryRun", "true");
     try {
       return jsonResult(await bridgeJson(`/build/place?${bridgeQueryString(params)}`, 15_000));
@@ -690,7 +701,9 @@ server.registerTool(
       "Build any network segment between two world coordinates (terrain-following): roads, train tracks, " +
       "pedestrian paths, power lines, pipes - any prefab from cs2_find_prefabs category 'road' or 'net'. " +
       "Straight by default; pass cx/cz for a curved segment through that control point. Length 8-1500m. " +
-      "Endpoints on existing nodes connect to them. Costs city money; fails with an explanation if blocked.",
+      "Endpoints on existing nodes connect to them. Fails with an explanation if blocked. " +
+      "Validation reads the real overlap: zoned growable buildings in the way are demolished automatically on apply (listed in `willDemolish` on dryRun and `demolished` on success); trees and props are hidden, not deleted (`hidden`); service, signature and player-placed buildings, burning buildings, water and steep terrain BLOCK, and the refusal names them in `blockedBy` (prefab, kind, position, error type). Always dryRun first and read willDemolish before applying. replace=true also demolishes plain overlapping buildings that block the build (never native map buildings, outside connections or burning ones), then builds; if anything else is wrong (water, slope, money, road access) nothing is demolished and the 409 carries blockedBy plus replacePlan. Everything demolished is listed. " +
+      "Costs city money.",
     inputSchema: {
       dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
       prefab: z.string().describe("Exact prefab name from cs2_find_prefabs (category road or net)"),
@@ -703,9 +716,16 @@ server.registerTool(
       e1: z.number().optional().describe("Elevation at start in meters (bridges/elevated; negative = tunnel-ish)"),
       e2: z.number().optional().describe("Elevation at end in meters"),
       force: z.boolean().optional().describe("Build even if the prefab is milestone-locked"),
+      replace: z
+        .boolean()
+        .optional()
+        .describe(
+          "Demolish the existing buildings that block this build (plain overlaps only), then build. Default false: blockers are reported in blockedBy and nothing is demolished. " +
+            "With dryRun it lists what would be demolished (replacePlan) and validAfterReplace.",
+        ),
     },
   },
-  async ({ prefab, x1, z1, x2, z2, cx, cz, e1, e2, force, dryRun }) => {
+  async ({ prefab, x1, z1, x2, z2, cx, cz, e1, e2, force, dryRun, replace }) => {
     const params = new URLSearchParams({
       prefab,
       x1: String(x1),
@@ -719,6 +739,7 @@ server.registerTool(
     if (e2 !== undefined) params.set("e2", String(e2));
     if (force) params.set("force", "true");
     if (dryRun) params.set("dryRun", "true");
+    if (replace) params.set("replace", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
@@ -879,7 +900,8 @@ server.registerTool(
       "Allowed for the same objects the game allows (service buildings, signature buildings, service upgrades, " +
       "parks, props); zoned growables and hydro dams cannot be moved. Give x/z (new position) or dx/dz (offset) " +
       "and/or rotation in degrees (default keeps the current rotation). The game validates the new spot " +
-      "(overlap, water, slope, road access...); dryRun=true only checks whether the move would be accepted.",
+      "(overlap, water, slope, road access...); dryRun=true only checks whether the move would be accepted. " +
+      "Validation reads the real overlap: zoned growable buildings in the way are demolished automatically on apply (listed in `willDemolish` on dryRun and `demolished` on success); trees and props are hidden, not deleted (`hidden`); service, signature and player-placed buildings, burning buildings, water and steep terrain BLOCK, and the refusal names them in `blockedBy` (prefab, kind, position, error type). Always dryRun first and read willDemolish before applying. ",
     inputSchema: {
       index: z.number().int().describe("Entity index (cs2_list_buildings / cs2_buildings_near)"),
       version: z.number().int().describe("Entity version"),
@@ -937,7 +959,8 @@ server.registerTool(
       "Install an upgrade from cs2_building_upgrades on a service building through the game's upgrade pipeline " +
       "(cost, unlocks and validation by the game). Extensions go to their fixed spot automatically; upgrades placed " +
       "beside the building (parking lots, extra areas) need x/z and optionally rotation. dryRun=true only checks it " +
-      "and reports the cost. Remove an installed upgrade with cs2_demolish on its entity.",
+      "and reports the cost. Remove an installed upgrade with cs2_demolish on its entity. " +
+      "Validation reads the real overlap: zoned growable buildings in the way are demolished automatically on apply (listed in `willDemolish` on dryRun and `demolished` on success); trees and props are hidden, not deleted (`hidden`); service, signature and player-placed buildings, burning buildings, water and steep terrain BLOCK, and the refusal names them in `blockedBy` (prefab, kind, position, error type). Always dryRun first and read willDemolish before applying. ",
     inputSchema: {
       index: z.number().int().describe("Building entity index"),
       version: z.number().int().describe("Building entity version"),
@@ -1056,16 +1079,60 @@ server.registerTool(
     description:
       "The game's native cell-map grids as row-major arrays: landValue, groundPollution, airPollution, " +
       "noisePollution, groundWater, groundWaterPollution. Use to pick good locations (cheap land, clean " +
-      "air, water for pumps) like a player reading infoviews.",
+      "air, water for pumps) like a player reading infoviews. Without x/z it returns the whole map (large); " +
+      "pass x, z and radius to get only a cropped square around a point (with its origin and cell size). " +
+      "For a quick local read of land value/pollution/noise use cs2_survey instead.",
     inputSchema: {
       layer: z
         .enum(["landValue", "groundPollution", "airPollution", "noisePollution", "groundWater", "groundWaterPollution"])
         .describe("Which data layer to export"),
+      x: z.number().optional().describe("Crop center X (with z): return only cells within the square around it"),
+      z: z.number().optional().describe("Crop center Z (with x)"),
+      radius: z.number().min(8).max(2000).optional().describe("Crop half-size in meters (default 150, with x/z)"),
     },
   },
-  async ({ layer }) => {
+  async ({ layer, x, z: zCoord, radius }) => {
+    const params = new URLSearchParams({ layer });
+    if (x !== undefined) params.set("x", String(x));
+    if (zCoord !== undefined) params.set("z", String(zCoord));
+    if (radius !== undefined) params.set("radius", String(radius));
     try {
-      return jsonResult(await bridgeJson(`/city/gridmap?layer=${layer}`, 30_000));
+      return jsonResult(await bridgeJson(`/city/gridmap?${bridgeQueryString(params)}`, 30_000));
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "cs2_survey",
+  {
+    title: "Survey an area",
+    description:
+      "One compact snapshot of everything around a point, to call BEFORE placing buildings, roads or zones there: " +
+      "roads (prefab, street name, lanes per direction, highway, flow %) and junctions (legs, control); buildings " +
+      "(kind, zoned-growable vs ploppable, footprint, facing, fire/abandoned/condemned) with `replaceable` = zoned " +
+      "growables the game auto-demolishes when a new object overlaps them; zone cell counts (occupied/empty); " +
+      "terrain (height range, max slope, nearest water); land value, ground/air/noise pollution averages and maxima; " +
+      "and whether the area is inside owned map tiles. Ends with a short `summary` of the things to watch out for. " +
+      "Replaces chaining cs2_list_roads, cs2_buildings_near, cs2_zoning, cs2_terrain and cs2_gridmap. Lists are capped " +
+      "(60 road segments, 80 buildings) with `truncated` counts.",
+    inputSchema: {
+      x: z.number().describe("Center X (world meters)"),
+      z: z.number().describe("Center Z (world meters)"),
+      radius: z.number().min(25).max(500).optional().describe("Radius in meters (default 150, clamped to 25-500)"),
+      include: z
+        .array(z.enum(["roads", "buildings", "zones", "terrain", "environment", "tiles"]))
+        .optional()
+        .describe("Sections to include (default: all)"),
+    },
+  },
+  async ({ x, z: zCoord, radius, include }) => {
+    const params = new URLSearchParams({ x: String(x), z: String(zCoord) });
+    if (radius !== undefined) params.set("radius", String(radius));
+    if (include && include.length > 0) params.set("include", include.join(","));
+    try {
+      return jsonResult(await bridgeJson(`/city/survey?${bridgeQueryString(params)}`, 30_000));
     } catch (err) {
       return errorResult(err);
     }
@@ -1659,14 +1726,20 @@ server.registerTool(
     title: "Diagnose a traffic jam",
     description:
       "Why one road segment or junction is congested. Returns the junction layout (legs, lanes toward/away per " +
-      "leg, lights/stop/roundabout/priority, distance to the next junction), the vehicles on and around it (type, " +
-      "what stopped ones wait for, destinations, how many are passing through vs local, the 500 m areas most of them " +
-      "head to), turning movements through each junction from the vehicles' own planned paths (with turns across " +
-      "oncoming traffic marked), parallel streets that could take load, and findings: rule-of-thumb causes from traffic " +
-      "engineering (signal delay, crossing conflicts, turns across traffic, short junction spacing, lane drops, through " +
-      "traffic on minor roads, truck share, single destination cluster) each with evidence and the tools to fix it. " +
-      "Pick the focus from cs2_traffic (bottlenecks / worstRoads) or cs2_vehicles (queueHeads). Take it while the jam " +
-      "is present; the baseline block is what to compare after a change.",
+      "leg, per-lane turns allowed and vehicles/stopped per lane, lights/stop/roundabout/priority, distance to the next " +
+      "junction), the vehicles on and around it (type, what stopped ones wait for, destinations, passing-through vs " +
+      "local, the 500 m areas most head to), turning movements from the vehicles' planned paths, the queueHead (stopped " +
+      "vehicles' blockers followed downstream to where the queue really starts, possibly outside the focus), parallel " +
+      "streets that are verified as connected detours (connected, detourRatio), flow as average AND worst daily period, " +
+      "and RANKED findings (rank 1 first, with cause/effect text and causedBy/causes links) with concrete targets " +
+      "(entity, current prefab, suggested wider prefab) and the tool calls to fix them. Finding codes: " +
+      "queueStartsElsewhere, signalDelay, crossingConflict, crossingTurns, shortJunctionSpacing, laneDrop, laneImbalance, " +
+      "missingTurnLane, lowCapacity, junctionLimited, throughTraffic, outsideConnection, destinationCluster, truckHeavy, " +
+      "carDependent, accessConflict, noClearCause. " +
+      "Pick the focus from cs2_traffic (bottlenecks / worstRoads) or cs2_vehicles (queueHeads). A single frame is noisy: " +
+      "use samples=3..6 while the jam is present (needs the simulation running; averaged, and signal/crossing findings " +
+      "need a majority of samples). Keep the baseline block and pass it back as `baseline` after a change to get a " +
+      "comparison with deltas and a verdict.",
     inputSchema: {
       index: z.number().int().optional().describe("Road segment or junction entity index (with version)"),
       version: z.number().int().optional().describe("Entity version"),
@@ -1678,17 +1751,49 @@ server.registerTool(
         .max(5000)
         .optional()
         .describe("Trips ending within this distance of the focus count as local, the rest as through traffic (default 1000)"),
+      samples: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .optional()
+        .describe("Snapshots taken over simulation frames and averaged (default 1; 3-6 recommended). Paused game: falls back to 1"),
+      intervalFrames: z
+        .number()
+        .int()
+        .min(1)
+        .max(600)
+        .optional()
+        .describe("Simulation frames between samples (default 30)"),
+      baseline: z
+        .object({
+          flowPercent: z.number().optional(),
+          worstPeriodFlowPercent: z.number().optional(),
+          vehiclesNearby: z.number().optional(),
+          stoppedNearby: z.number().optional(),
+          stoppedSharePercent: z.number().optional(),
+          vehicles: z.number().optional(),
+          stopped: z.number().optional(),
+        })
+        .passthrough()
+        .optional()
+        .describe("The baseline block of an earlier result (or just flowPercent/vehicles/stopped): adds a comparison with deltas"),
     },
   },
-  async ({ index, version, x, z: zCoord, localRadius }) => {
+  async ({ index, version, x, z: zCoord, localRadius, samples, intervalFrames, baseline }) => {
     const params = new URLSearchParams();
     if (index !== undefined) params.set("index", String(index));
     if (version !== undefined) params.set("version", String(version));
     if (x !== undefined) params.set("x", String(x));
     if (zCoord !== undefined) params.set("z", String(zCoord));
     if (localRadius !== undefined) params.set("localRadius", String(localRadius));
+    if (samples !== undefined) params.set("samples", String(samples));
+    if (intervalFrames !== undefined) params.set("intervalFrames", String(intervalFrames));
+    if (baseline !== undefined) params.set("baseline", JSON.stringify(baseline));
+    // Sampling waits for the simulation to advance (samples x intervalFrames), so allow more time than a snapshot.
+    const timeoutMs = (samples ?? 1) > 1 ? 45_000 : 12_000;
     try {
-      return jsonResult(await bridgeJson(`/city/traffic/diagnose?${bridgeQueryString(params)}`));
+      return jsonResult(await bridgeJson(`/city/traffic/diagnose?${bridgeQueryString(params)}`, timeoutMs));
     } catch (err) {
       return errorResult(err);
     }
@@ -1776,7 +1881,8 @@ server.registerTool(
       "joins (merge/diverge ramps onto a highway, track continuing a station's track end). For flyover ramps give " +
       "the elevated end e1/e2: it then only joins networks at that height. A new segment leaving a junction along " +
       "the same line as an existing one is merged into it by the game, so start ramps at a separate point. " +
-      "Validated by the game; costs money like a player build.",
+      "Validated by the game; costs money like a player build. " +
+      "Validation reads the real overlap: zoned growable buildings in the way are demolished automatically on apply (listed in `willDemolish` on dryRun and `demolished` on success); trees and props are hidden, not deleted (`hidden`); service, signature and player-placed buildings, burning buildings, water and steep terrain BLOCK, and the refusal names them in `blockedBy` (prefab, kind, position, error type). Always dryRun first and read willDemolish before applying. replace=true also demolishes plain overlapping buildings that block the build (never native map buildings, outside connections or burning ones), then builds; if anything else is wrong (water, slope, money, road access) nothing is demolished and the 409 carries blockedBy plus replacePlan. Everything demolished is listed. ",
     inputSchema: {
       prefab: z.string().describe("Exact network prefab name (cs2_find_prefabs category road or net)"),
       x1: z.number().describe("Start X"),
@@ -1808,9 +1914,16 @@ server.registerTool(
       smooth: z.boolean().optional().describe("Tangent-continuous ends: follow the split road or continue a dead end (not with cx/cz)"),
       force: z.boolean().optional().describe("Build even if the prefab is milestone-locked"),
       dryRun: z.boolean().optional().describe("Only run the game's validation and report validity and cost; nothing is built"),
+      replace: z
+        .boolean()
+        .optional()
+        .describe(
+          "Demolish the existing buildings that block this build (plain overlaps only), then build. Default false: blockers are reported in blockedBy and nothing is demolished. " +
+            "With dryRun it lists what would be demolished (replacePlan) and validAfterReplace.",
+        ),
     },
   },
-  async ({ prefab, x1, z1, x2, z2, cx, cz, c2x, c2z, snap, e1, e2, smooth, force, dryRun }) => {
+  async ({ prefab, x1, z1, x2, z2, cx, cz, c2x, c2z, snap, e1, e2, smooth, force, dryRun, replace }) => {
     const params = new URLSearchParams({
       prefab,
       x1: String(x1),
@@ -1828,6 +1941,7 @@ server.registerTool(
     if (smooth) params.set("smooth", "true");
     if (force) params.set("force", "true");
     if (dryRun) params.set("dryRun", "true");
+    if (replace) params.set("replace", "true");
     try {
       return jsonResult(await bridgeJson(`/build/road/connect?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {
@@ -1955,23 +2069,32 @@ server.registerTool(
       "Place a road-side building (station, depot, service building...) flush against a road segment, facing it: " +
       "at curve position t (0-1) along the segment, on its left or right side as seen driving from the segment's " +
       "start to its end. Position and rotation come from the road's geometry and the building's lot, so the front " +
-      "touches the road edge. The game validates the placement; dryRun=true only reports it.",
+      "touches the road edge. The game validates the placement; dryRun=true only reports it (position, rotation, cost, blockers). " +
+      "Validation reads the real overlap: zoned growable buildings in the way are demolished automatically on apply (listed in `willDemolish` on dryRun and `demolished` on success); trees and props are hidden, not deleted (`hidden`); service, signature and player-placed buildings, burning buildings, water and steep terrain BLOCK, and the refusal names them in `blockedBy` (prefab, kind, position, error type). Always dryRun first and read willDemolish before applying. replace=true also demolishes plain overlapping buildings that block the build (never native map buildings, outside connections or burning ones), then builds; if anything else is wrong (water, slope, money, road access) nothing is demolished and the 409 carries blockedBy plus replacePlan. Everything demolished is listed. ",
     inputSchema: {
       prefab: z.string().describe("Exact building prefab name"),
       road: z.object({ index: z.number().int(), version: z.number().int() }).describe("Road segment (cs2_road_graph)"),
       side: z.enum(["left", "right"]).describe("Side of the road, as seen from the segment's start"),
       t: z.number().min(0).max(1).optional().describe("Position along the segment (default 0.5)"),
       gap: z.number().min(0).max(50).optional().describe("Extra distance from the road edge in meters (default 0)"),
-      dryRun: z.boolean().optional().describe("Only compute the position and rotation"),
+      dryRun: z.boolean().optional().describe("Only compute the position and rotation and run the game's validation (blockedBy, willDemolish, cost)"),
       force: z.boolean().optional().describe("Place even if the prefab is milestone-locked"),
+      replace: z
+        .boolean()
+        .optional()
+        .describe(
+          "Demolish the existing buildings that block this build (plain overlaps only), then build. Default false: blockers are reported in blockedBy and nothing is demolished. " +
+            "With dryRun it lists what would be demolished (replacePlan) and validAfterReplace.",
+        ),
     },
   },
-  async ({ prefab, road, side, t, gap, dryRun, force }) => {
+  async ({ prefab, road, side, t, gap, dryRun, force, replace }) => {
     const params = new URLSearchParams({ prefab, road: `${road.index}:${road.version}`, side });
     if (t !== undefined) params.set("t", String(t));
     if (gap !== undefined) params.set("gap", String(gap));
     if (dryRun) params.set("dryRun", "true");
     if (force) params.set("force", "true");
+    if (replace) params.set("replace", "true");
     try {
       return jsonResult(await bridgeJson(`/build/place/roadside?${bridgeQueryString(params)}`, 15_000));
     } catch (err) {

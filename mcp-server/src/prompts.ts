@@ -14,7 +14,8 @@ function userPrompt(text: string) {
 const SAFETY_RULES =
   "Ground rules: read state before acting; call cs2_save_game before the first change; run every build with " +
   "dryRun=true first and only apply what the game accepts; after changes, verify with cs2_screenshot or the " +
-  "matching list tool; never demolish occupied buildings without asking me.";
+  "matching list tool; read willDemolish / blockedBy in every dryRun and never demolish occupied buildings without " +
+  "asking me (replace=true demolishes too).";
 
 export const GUIDE = `# Using cs2-mcp
 
@@ -23,6 +24,7 @@ export const GUIDE = `# Using cs2-mcp
   automatically unless a tool takes y or an elevation.
 - Entities are addressed by index + version (from the list/near/inspect tools). Ids go stale after demolition.
 - Rotations are degrees: 0 faces +z, 90 faces +x (the facingDegrees of cs2_buildings_near uses the same convention).
+- Before placing buildings or roads in an area, call cs2_survey (x, z, radius) once: it shows roads, buildings that would be auto-replaced, zoning, terrain/water, pollution and tile ownership.
 
 ## Safe changes
 - cs2_save_game before large operations.
@@ -31,6 +33,20 @@ export const GUIDE = `# Using cs2-mcp
 - Builds cost money like player builds and respect milestone locks (force=true overrides locks only).
 - One build operation runs at a time: send build calls one after another, or put them in one cs2_batch.
 - cs2_history lists what was changed and what it cost; the player may have set an AI spending limit (shown there).
+
+## What a build destroys or hits
+- Placement and road tools (cs2_place_building, cs2_place_roadside, cs2_build_road, cs2_connect_road, cs2_place_upgrade,
+  cs2_move_building) report the real impact in every dryRun: willDemolish (buildings deleted on apply), blockedBy
+  (what refuses the build) and hidden (count of trees/props that get hidden). A successful build lists demolished.
+- Zoned growable buildings in the way are demolished AUTOMATICALLY by the game when you build over them: they are in
+  willDemolish. Check it: homes and jobs disappear. Trees and props are only hidden, not deleted.
+- Service, signature and other player-placed buildings, native map buildings, burning buildings, water and steep
+  terrain BLOCK the build: the 409 names them in blockedBy (prefab, kind, position, error type).
+- replace=true (cs2_place_building, cs2_place_roadside, cs2_build_road, cs2_connect_road) demolishes the plain
+  blocking buildings and builds. dryRun+replace shows replacePlan first. If anything other than such overlaps is
+  wrong (water, slope, money, road access) nothing is demolished and replacePlan lists what you would have to
+  cs2_demolish yourself. Ask before using it on buildings the player cares about.
+- Always dryRun first and read willDemolish before applying.
 
 ## Typical flows
 - Service gaps: cs2_coverage -> worstGaps -> cs2_find_prefabs -> cs2_place_roadside / cs2_place_building (dryRun) -> build.
@@ -64,25 +80,43 @@ Real-world traffic engineering, limited to what the game simulates and what the 
 1. cs2_save_game.
 2. Find the jam: cs2_traffic (worst roads, bottlenecks) and cs2_vehicles (queueHeads = where queues start,
    deadlocks = gridlock loops). The visible jam is often the tail; the cause is at the queue head.
-3. cs2_traffic_diagnose on the queue head or bottleneck. Keep its baseline block.
+3. cs2_traffic_diagnose on the queue head or bottleneck with samples=4 (several snapshots averaged; one frame is
+   noisy). Read queueHead first: if it lies outside the focus (finding queueStartsElsewhere, rank 1), diagnose THAT
+   entity instead. Work through the findings in rank order; causedBy/causes link them. Keep its baseline block.
 4. Change ONE thing, dryRun first. Fix the cause the findings point to, not the symptom.
 5. cs2_run_simulation for 3-6 in-game hours (traffic values refresh about every 45 in-game minutes; compare the
    same time of day if possible).
-6. cs2_traffic_diagnose with the same focus and cs2_traffic around it. Keep the change only if flow rose and stopped
+6. cs2_traffic_diagnose with the same focus, samples=4 and baseline=<the saved block>; read comparison.verdict
+   (worst-period flow and stopped share) and cs2_traffic around it. Keep the change only if flow rose and stopped
    vehicles fell without moving the jam next door. Otherwise undo it (the bridge cannot load a save; reverse the
    change, or reload the save in the game).
+
+## Reading the result
+- queueHead: where the longest queue really starts (stopped vehicles' blockers followed downstream). inFocusArea=false
+  means the focus is only the tail. deadlock=true is a loop of vehicles blocking each other.
+- flowPercent is the average over the four daily periods, worstPeriodFlowPercent the worst one: a road that is fine on
+  average can still jam at peak. Findings use the worst period.
+- findings are ordered by rank; each has cause/effect text, causedBy/causes ids (fix a cause and its effects go away)
+  and a target (entity, current prefab, suggestedPrefab for a wider road: pass it to cs2_replace_road).
+- parallelStreets[].connected tells whether a street really links both ends of the focus (detourRatio = detour length /
+  focus length); only connected ones count as alternatives in throughTraffic.
+- sampling: samples>1 needs the simulation running (paused games fall back to 1 sample); signalDelay and
+  crossingConflict need a majority of samples.
 
 ## Causes and fixes
 | Finding | What happens | Fixes (tools) |
 |---|---|---|
+| queueStartsElsewhere | The queue here backs up from a head outside the focus | cs2_traffic_diagnose on that head (target); fix it first |
 | signalDelay | Lights give each direction only part of the time | Remove lights or all-way stop on small junctions (cs2_set_junction_control); separate the dominant movement with a ramp or overpass (cs2_connect_road smooth=true, elevation) |
 | crossingConflict | Busy unsignalised junction, vehicles wait for gaps | Lights (cs2_set_junction_control mode=lights); fewer conflicting movements: one-way minor leg (cs2_replace_road) or end the minor road before the junction |
 | crossingTurns | Turns across oncoming traffic block the lane behind | Wider road with more lanes (cs2_upgrade_road); move the turn to a signalised junction; ramp for the dominant turn |
+| laneImbalance | One lane holds the queue, other lanes nearly empty | Give the busy movement a second lane (cs2_replace_road to target.suggestedPrefab); check which lanes allow which turn |
+| missingTurnLane | A dominant turn shares its lane with through traffic | Dedicated turn lane: wider road (cs2_replace_road, target.suggestedPrefab) or move the turn to another junction |
 | shortJunctionSpacing | Queues spill from one junction into the next | Remove or merge one connection (cs2_demolish the short link), one-way pair, move the side road |
 | laneDrop | Lanes merge at one point | Keep the lane count to the next junction (cs2_upgrade_road) or end the extra lane as an exit |
 | lowCapacity | One lane per direction carries through traffic | Upgrade the road, or give the traffic another route |
 | junctionLimited | Wide road jammed anyway | Do not add lanes (induced demand); fix the junctions, add parallel routes, add transit |
-| throughTraffic | Minor road used as a shortcut | Road hierarchy: an arterial or highway route that is faster (cs2_build_road, cs2_upgrade_road); local streets should not be the fastest way through |
+| throughTraffic | Minor road used as a shortcut (counts connected alternatives only) | Road hierarchy: an arterial or highway route that is faster (cs2_build_road, cs2_upgrade_road); local streets should not be the fastest way through |
 | outsideConnection | Traffic to the highway funnels through | Smooth on/off ramps, more ramp lanes, a second connection; cargo to rail, harbor or air |
 | destinationCluster | One area attracts most trips | More access points from other directions, an arterial link, a transit line to it |
 | truckHeavy | Freight in city traffic | Direct highway access for industry, cargo rail/harbor/airport, keep trucks off residential streets |
@@ -248,9 +282,9 @@ export function registerPromptsAndResources(server: McpServer, bridgeJson: Bridg
         `${SAFETY_RULES}\n\n` +
           `Fix the worst traffic jam${area ? ` around ${area}` : " in my city"}. Read the cs2://guide/traffic resource ` +
           "first and follow its method. Find the queue head with cs2_traffic and cs2_vehicles, run cs2_traffic_diagnose " +
-          "on it and note the baseline. Explain the cause in one or two sentences using the findings and turning " +
+          "(samples=4) on it, follow queueStartsElsewhere to the real queue head if there is one, and note the baseline. Explain the cause in one or two sentences using the findings and turning " +
           "movements. Then apply one fix at a time (dryRun first), run the simulation 3-6 in-game hours, diagnose the " +
-          "same focus again and compare with the baseline. Keep a change only if it helped; stop after three attempts " +
+          "same focus again (samples=4, baseline=the saved block) and read the comparison verdict. Keep a change only if it helped; stop after three attempts " +
           "and report each change with its before/after flow and stopped vehicles. Never demolish buildings to widen " +
           "roads without asking me.",
       ),

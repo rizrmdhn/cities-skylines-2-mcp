@@ -313,7 +313,7 @@ namespace CS2MCP
             quaternion rotation = quaternion.RotateY(math.radians(rotationDegrees));
 
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueuePlacement(prefabEntity, prefab, position, rotation, request, IsDryRun(request)))
+            if (!tool.TryQueuePlacement(prefabEntity, prefab, position, rotation, request, IsDryRun(request), IsReplace(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
@@ -377,7 +377,7 @@ namespace CS2MCP
             var elevations = new float2(math.clamp(e1, -30f, 60f), math.clamp(e2, -30f, 60f));
 
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueueRoad(prefabEntity, prefab, start, end, mid, hasMid, elevations, request, IsDryRun(request)))
+            if (!tool.TryQueueRoad(prefabEntity, prefab, start, end, mid, hasMid, elevations, request, IsDryRun(request), IsReplace(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
@@ -560,6 +560,12 @@ namespace CS2MCP
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
             return null;
+        }
+
+        /// <summary>replace=true: demolish plain overlapping buildings that block a build, then build.</summary>
+        private static bool IsReplace(BridgeRequest request)
+        {
+            return request.TryGetBool("replace", out bool replace) && replace;
         }
 
         private static bool IsForced(BridgeRequest request)

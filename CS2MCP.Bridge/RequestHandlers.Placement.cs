@@ -177,26 +177,15 @@ namespace CS2MCP
             position.y = TerrainUtils.SampleHeight(ref terrain, position);
             float2 facing = -normal;
             quaternion rotation = ToolUtils.CalculateRotation(facing);
-            float rotationDegrees = math.degrees(math.atan2(facing.x, facing.y));
 
-            if (request.TryGetBool("dryRun", out bool dryRun) && dryRun)
-            {
-                return BridgeResponse.Json(new
-                {
-                    dryRun = true,
-                    prefab = prefab.name,
-                    position = new { x = position.x, y = position.y, z = position.z },
-                    rotationDegrees,
-                    lotDepth,
-                    roadWidth,
-                });
-            }
+            // dryRun also goes through the placement tool: the game's validation (blockedBy / willDemolish / cost)
+            // plus the computed position and rotation in the response.
             if (TransitToolsBusy(out error))
             {
                 return error;
             }
             BridgeToolSystem tool = World.GetOrCreateSystemManaged<BridgeToolSystem>();
-            if (!tool.TryQueuePlacement(prefabEntity, prefab, position, rotation, request))
+            if (!tool.TryQueuePlacement(prefabEntity, prefab, position, rotation, request, IsDryRun(request), IsReplace(request)))
             {
                 return BridgeResponse.Error(409, "another build operation is in progress, retry shortly");
             }
