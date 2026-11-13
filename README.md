@@ -167,6 +167,7 @@ The installer is per-user and does not require administrator rights. Settings an
 | `cs2_budget` | Budget breakdown: 14 income / 15 expense sources |
 | `cs2_city_services` | Electricity, water & sewage, garbage status |
 | `cs2_infoview` | The figures of a game info view panel, recalculated now: education (students / eligible / capacity per school level), healthcare (patients, cemetery), garbage (landfill, processing), police (jail, prison, crime), disaster shelters, electricity, water, post, telecom and more |
+| `cs2_service_districts` / `cs2_set_service_districts` | Operating district of every service building (entire city or restricted to listed districts), per-service unserved districts and, per district, the providers that do not reach it; change a building's districts |
 | `cs2_coverage` | Service coverage of zoned buildings (healthcare, fire, police, parks, post, education, shelters, welfare, telecom): underserved buildings/residents, level buckets on the infoview scale, providers and the worst coverage gaps to place new service buildings |
 | `cs2_labor` | Employment, unemployment, jobs by education level, age structure |
 | `cs2_statistics` | Time series for 60+ statistics (32 samples per in-game day) |
